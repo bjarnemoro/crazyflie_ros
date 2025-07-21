@@ -35,11 +35,16 @@ def create_new_sdf(name):
 
     sdf = sdf.replace("<robotNamespace>crazyflie</robotNamespace>", "<robotNamespace>{}</robotNamespace>".format(name))
 
-    temp_sdf = tempfile.NamedTemporaryFile(mode='w+', dir='/home/bmoro/Documents/crazyflies/ros2_ws/src/ros_gz_crazyflie/ros_gz_crazyflie_gazebo/models/crazyflie'
-        , delete=False, suffix='.sdf')
-    temp_sdf.write(sdf)
+    sdf = sdf.replace("<robotNamespace>crazyflie</robotNamespace>", "<robotNamespace>{}</robotNamespace>".format(name))
+
+    file = open("/home/bmoro/Documents/crazyflies/ros2_ws/src/ros_gz_crazyflie/ros_gz_crazyflie_gazebo/models/crazyflie/{}.sdf".format(name), "w")
+    file.write(sdf)
+
+    # temp_sdf = tempfile.NamedTemporaryFile(mode='w+', dir='/home/bmoro/Documents/crazyflies/ros2_ws/src/ros_gz_crazyflie/ros_gz_crazyflie_gazebo/models/crazyflie'
+    #     , delete=False, suffix='.sdf')
+    # temp_sdf.write(sdf)
     
-    return temp_sdf
+    return file
 
 def generate_bridge_nodes(drone_names):
     bridge_nodes = []
@@ -193,7 +198,7 @@ def generate_launch_description():
         output='screen')
         drone_spawns.append(start_gazebo_ros_spawner_cmd)
 
-    #temp_file.close()
+        #temp_file.close()
 
     gen_nodes = generate_bridge(drones)
 
