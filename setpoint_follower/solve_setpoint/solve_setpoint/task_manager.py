@@ -14,7 +14,7 @@ def flatten(xss):
 class Task:
     timespan: list[int, int]
     edges: list[int, int]
-    rel_position: list[int, int]
+    rel_position: list[int, int] | list[int, int, int]
 
 
 class TaskManager():
@@ -41,7 +41,7 @@ class TaskManager():
         task_pos = [task.rel_position for task in active_tasks]
         task_rad = [10 for task in active_tasks]
 
-        return (task_paths, np.array(task_pos), np.array([task_rad])) 
+        return (task_paths, task_pos, [task_rad])
     
 
     def __relative_tasks(self, task: Task, comm_graph):

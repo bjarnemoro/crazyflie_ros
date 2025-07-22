@@ -28,6 +28,9 @@ def solve_radius(agents, task_paths, task_rad, return_mode):
     used_agents = used_agent(task_paths)
     num_areas = len(used_agents)
 
+    if type(task_rad) == list:
+        task_rad = np.array(task_rad)
+
     areas = cp.Variable((1, num_areas))
     
     #------------------------------------------------------------------

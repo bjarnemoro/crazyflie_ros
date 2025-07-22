@@ -66,15 +66,11 @@ class GraphManager:
             shortest_edges = [[shortest_path[i], shortest_path[i+1]] for i in range(len(shortest_path)-1)]
             self.__task_paths.append(shortest_edges)
             self.__task_pos.append(task[2])
-
-    def get_pos(self):
-        return self.__agent_pos
-
-    def get_comm_graph(self):
-        return self.__comm_graph
+    
 
     def compute_setpoint(self, result):
         edges = [edge for edge, _ in result]
+        self.dim = len(result[0][1])
         self.result_doubled = {tuple(edge):tuple(val) for edge, val in result}
         self.result_doubled.update({(edge[1], edge[0]): tuple(-val) for edge, val in result})
 
@@ -93,36 +89,23 @@ class GraphManager:
             setpoints = deepcopy(self.__agent_pos)
 
             for key in self.comm_graph_res:
-                tot_diff = np.zeros(2)
+                tot_diff = np.zeros(self.dim)
                 for n in self.comm_graph_res[key]:
                     desired = np.array(self.result_doubled[(key, n)])
-                    actual = self.__agent_pos[n][:2] - self.__agent_pos[key][:2]
+                    actual = self.__agent_pos[n][:self.dim] - self.__agent_pos[key][:self.dim]
                     difference = actual - desired
                     tot_diff += difference
 
-                setpoints[key][:2] += tot_diff
+                setpoints[key][:self.dim] += tot_diff
 
             return setpoints
 
-    def rel_setpoint(self, log):
-        results = {(0,3):(-0.66,-0.33),(3,0):(0.66,0.33), (3,6):(-0.66,-0.33), (6,3):(0.66,0.33), (6,9):(-0.66,-0.33), (9,6):(0.66,0.33)}
-        comm_graph = {0:[3], 3:[0,6], 6:[3, 9], 9:[6]}
-
-        setpoints = deepcopy(self.__agent_pos)
-
-        for key in comm_graph:
-            tot_diff = np.zeros(2)
-            for n in comm_graph[key]:
-                desired = np.array(results[(key, n)])
-                actual = self.__agent_pos[n][:2] - self.__agent_pos[key][:2]
-                difference = actual - desired
-                tot_diff += difference
-
-            setpoints[key][:2] += tot_diff
-
-            log("for {} the total difference is {}".format(key, tot_diff))
-
-        return setpoints
-
     def set_setpoints(self):
         self.__set_pos = deepcopy(self.__agent_pos) #TEMP!!
+        self.__set_pos[:,2] = 1
+
+    def get_pos(self):
+        return self.__agent_pos
+
+    def get_comm_graph(self):
+        return self.__comm_graph

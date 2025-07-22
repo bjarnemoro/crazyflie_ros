@@ -28,15 +28,18 @@ def solve_task(agents, task_paths, task_pos, return_mode):
     #create a list with a unique index of all agents that are used
     used_agents = used_agent(task_paths)
 
+    if type(task_pos) == list:
+        task_pos = np.array(task_pos)
+
     #create a variable for every agents exept the first, which provides a reference
     num_vars = len(used_agents) - 1
-    dim = 2
+    dim = len(agents[0])
     
     cp_start_par = cp.Parameter((1, dim))
     cp_vars = cp.Variable((num_vars, dim))
     
     #cp_start_par = np.array([agents[task_paths[0][0][0]].get_position()])
-    cp_start_par = np.array([agents[task_paths[0][0][0]][:2]])
+    cp_start_par = np.array([agents[task_paths[0][0][0]][:dim]])
     par_var = cp.vstack([cp_start_par, cp_vars])
 
     #-----------------------------------------------------------------------
