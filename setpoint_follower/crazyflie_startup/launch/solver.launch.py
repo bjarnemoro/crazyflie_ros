@@ -26,18 +26,6 @@ def generate_launch_description():
             os.path.join(pkg_project_crazyflie_gazebo, 'launch', 'crazyflie_simulation_10.launch.py'))
     )
 
-    #start a simple mapper node
-    solver_node = Node(
-        package='solve_setpoint',
-        executable='solve_setpoint',
-        name='solve_setpoint',
-        output='screen',
-        parameters=[
-            {'robot_prefix': '/solver_node'},
-            {'use_sim_time': True}
-        ]
-    )
-
     manager_node = Node(
         package='solve_setpoint',
         executable='manager',
@@ -49,29 +37,35 @@ def generate_launch_description():
         ]
     )
 
-    drones = ["crazyflie1", "crazyflie2", "crazyflie3", 
-    "crazyflie4", "crazyflie5", "crazyflie6",
-    "crazyflie7", "crazyflie8", "crazyflie9", "crazyflie10"]
+    drones = ['/crazyflie{}'.format(i) for i in range(1,11)]
 
-    agent_node_list = []
-    for drone in drones:
+    # agent_node_list = []
+    # for drone in drones:
 
-        agent_node = Node(
+    #     agent_node = Node(
+    #         package='solve_setpoint',
+    #         executable='agent',
+    #         name='agent_{}'.format(drone),
+    #         output='screen',
+    #         parameters=[
+    #             {'robot_prefix': '/{}'.format(drone)},
+    #             {'use_sim_time': True}
+    #         ]
+    #     )
+
+    #     agent_node_list.append(agent_node)
+    agent_node = Node(
             package='solve_setpoint',
             executable='agent',
-            name='agent_{}'.format(drone),
             output='screen',
             parameters=[
-                {'robot_prefix': '/{}'.format(drone)},
+                {'robot_prefix': 'crazyflie'},
                 {'use_sim_time': True}
             ]
         )
 
-        agent_node_list.append(agent_node)
-
     return LaunchDescription([
         crazyflie_simulation,
-        *agent_node_list,
-        solver_node,
+        agent_node,
         manager_node
         ])

@@ -19,10 +19,8 @@ setup(
     maintainer_email='bjarne.moro@gmail.com',
     description='TODO: Package description',
     license='TODO: License declaration',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'solve_setpoint = solve_setpoint.solve_setpoint:main',
             'agent = solve_setpoint.agent:main',
             'manager = solve_setpoint.managers:main'
         ],

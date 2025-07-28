@@ -1,18 +1,21 @@
+import sys
 import rclpy
+import signal
 import numpy as np
 import tf_transformations
 
 from rclpy.node import Node
-from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+from geometry_msgs.msg import Twist
+from rclpy.executors import MultiThreadedExecutor
 
-SPEED = 0.5
+from solve_setpoint.config import Config
 
 class Agent(Node):
-    def __init__(self):
-        super().__init__('agent')
+    def __init__(self, drone):
+        super().__init__(drone[1:])
         self.declare_parameter('robot_prefix', '/crazyflie')
-        self.robot_prefix = self.get_parameter('robot_prefix').value
+        self.robot_prefix = drone
 
         self.twist_publisher = self.create_publisher(Twist, self.robot_prefix + '/cmd_vel', 10)
         self.create_subscription(Odometry, self.robot_prefix + '/odom', self.odom_callback, 10)
@@ -25,7 +28,7 @@ class Agent(Node):
         self.setpoint_angles = [0., 0., 0.]
 
         self.set_recv = False
-        self.timer = self.create_timer(0.1, self.timer_callback)
+        self.timer = self.create_timer(Config.AGENT_TIMER, self.timer_callback)
 
     def timer_callback(self):
         time = self.get_clock().now().nanoseconds
@@ -33,9 +36,9 @@ class Agent(Node):
 
         if self.set_recv:
             msg = Twist()
-            msg.linear.x = np.clip(self.setpoint_pos[0] - self.pos[0], -SPEED, SPEED)
-            msg.linear.y = np.clip(self.setpoint_pos[1] - self.pos[1], -SPEED, SPEED)
-            msg.linear.z = np.clip(self.setpoint_pos[2] - self.pos[2], -SPEED, SPEED)
+            msg.linear.x = np.clip(self.setpoint_pos[0] - self.pos[0], -Config.SPEED, Config.SPEED)
+            msg.linear.y = np.clip(self.setpoint_pos[1] - self.pos[1], -Config.SPEED, Config.SPEED)
+            msg.linear.z = np.clip(self.setpoint_pos[2] - self.pos[2], -Config.SPEED, Config.SPEED)
             self.twist_publisher.publish(msg)
 
     def odom_callback(self, msg):
@@ -60,12 +63,28 @@ class Agent(Node):
         self.setpoint_angles[2] = euler[2]
 
 
+def signal_handler(sig, frame):
+    print("Shutdown signal received, cleaning up...")
+    rclpy.shutdown()
+    sys.exit(0)
+
 def main(args=None):
     rclpy.init(args=args)
 
-    agent = Agent()
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
-    rclpy.spin(agent)
+    drones = ['/crazyflie{}'.format(i) for i in range(1,Config.NUM_DRONES+1)]
+    agents = [Agent(drone) for drone in drones]
+
+    executor = MultiThreadedExecutor()
+    for agent in agents:
+        executor.add_node(agent)
+
+    executor.spin()
+
+    for agent in agents:
+        agent.destroy_node()
 
     rclpy.shutdown()
 

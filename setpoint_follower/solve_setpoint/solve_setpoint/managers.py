@@ -1,156 +1,207 @@
+import sys
 import rclpy
+import signal
 import numpy as np
-import matplotlib.pyplot as plt
-from collections import defaultdict
+
 from rclpy.node import Node
-from copy import deepcopy
-from enum import Enum
-
-from std_msgs.msg import Int32MultiArray
 from nav_msgs.msg import Odometry
-from solve_setpoint.solvers.shortest_path import get_shortest_distance
-from solve_setpoint.solvers.radius_solver import solve_radius
-from solve_setpoint.solvers.task_solver import solve_task
+from std_msgs.msg import Int32MultiArray
+from rclpy.executors import MultiThreadedExecutor
+from msg_interface.msg import TaskEdge, TaskEdgeList
 
-from solve_setpoint.task_manager import TaskManager, Task
+from solve_setpoint.config import Config
 from solve_setpoint.graph_manager import GraphManager
+from solve_setpoint.task_manager import TaskManager, Task
+from solve_setpoint.solvers.task_solver import solve_task
+from solve_setpoint.solvers.radius_solver import solve_radius
 
-NUM_DRONES = 10
-MODE = "2d"#"2d" or "3d"
+
+class State:
+    START_DRONE = 0
+    MAINLOOP = 1
+
 
 class Manager(Node):
-    """Provides the interface to the outside
-    by means of a task file which gives tasks over time 
+    """
+    The manager handles the task graph and agent graph
+    its main functions are setting the setpoint for the agents
+    these setpoints are calculated using optimization methods on given tasks
     """
     def __init__(self):
         super().__init__('manager')
         self.declare_parameter('robot_prefix', '/manager')
         self.robot_prefix = self.get_parameter('robot_prefix').value
 
-        #setup the graph manager and task manager
-        self.graph_manager = GraphManager()
-
-        self.edges = [[0,1], [0,2], [0,3], [1,3], [1,4], [2,3], [3,4], [2,5], [3,6], [4,7], [8,9], [5,8], [6,8] ,[6,9], [7,9], [5,6], [6,7]]
-        self.graph_manager.set_edges(self.edges)
-
-        msg = Int32MultiArray()
-        msg.data = [i for pair in self.edges for i in pair]
-        self.edge_publisher = self.create_publisher(Int32MultiArray, "/graph_edges", 10)
-        self.edge_publisher.publish(msg)
-
-
-        if MODE == "2d":
+        #setup the tasks that are to be done
+        if Config.MODE == "2d":
             self.tasks = [
-                Task([5,8], [0,9], [-2,-1]),
-                Task([5,8], [4, 5], [0, 1.6]),
+                Task([4,9], [0,9], [-2,-1]),
+                Task([4,9], [4, 5], [0, 1.6]),
                 Task([10,13], [1,8], [-2, 1]),
                 Task([10,13], [7,2], [0.2, 1.6])]
-        elif MODE == "3d":
+        elif Config.MODE == "3d":
             self.tasks = [
-                Task([5,8], [0,9], [-2,-1, 1]),
-                Task([5,8], [4,5], [0, 1.6, 0.5]),
+                Task([4,9], [0,9], [-2,-1, 1]),
+                Task([4,9], [4,5], [0, 1.6, 0.5]),
                 Task([10,13], [1,8], [-2, 1, 0.2]),
                 Task([10,13], [7,2], [0.2, 1.6, -1])]
 
+        #setup the graph manager and task manager
+        self.graph_manager = GraphManager()
         self.task_manager = TaskManager(self.tasks)
+
         self.recalc_times = self.task_manager.recalculate_at()
+        self.triggered_times = set()
+        self.setpoints = np.zeros((Config.NUM_DRONES, 3))
 
-        self.setpoints = np.zeros((NUM_DRONES, 3))
-
-        #connect the graph manager to the realtime position of the drones
-        self.drones = ['/crazyflie{}'.format(i) for i in range(1,11)]
+        #setup all the subscribers and publishers
+        self.drones = ['/crazyflie{}'.format(i) for i in range(1,Config.NUM_DRONES+1)]
         self.odom_subscribers = []
         self.setpoint_publishers = []
+
+        self.edge_publisher = self.create_publisher(Int32MultiArray, "/graph_edges", 10)
+        self.task_publisher = self.create_publisher(TaskEdgeList, "/task_edges", 10)
+        
         for i, drone in enumerate(self.drones):
-            callback = lambda msg, idx=i: self.graph_manager.set_pos(msg, idx)
+            callback = lambda msg, idx=i: self.graph_manager.set_pos_callback(msg, idx)
             self.odom_subscribers.append(self.create_subscription(
                 Odometry, drone + '/odom', callback, 10))
-            self.setpoint_publishers.append(self.create_publisher(Odometry, drone + '/set', 10))
+            self.setpoint_publishers.append(self.create_publisher(Odometry, drone + '/set', 10)) 
 
-        self.get_logger().info("\n\nStarting manager!!\n\n")
-
-        self.succesful_start = False
-        self.in_position = False
-
-        self.timer = self.create_timer(0.1, self.mainloop)
-        self.setpoint_timer = self.create_timer(0.1, self.setpoint_update)
+        #start the main loops of the system with a timer method
+        self.timer = self.create_timer(Config.MAIN_TIMER, self.mainloop)
+        self.setpoint_timer = self.create_timer(Config.SETPOINT_TIMER, self.setpoint_update)
         self.once = True
             
-
-        self.state = 0
+        #set the starting state
+        self.state = State.START_DRONE
+        self.get_logger().info("\n\nStarting manager!!\n\n")
 
     def mainloop(self):
-        if self.state == 0:
+        if self.state == State.START_DRONE:
+            #check whether all drones have published their odometry
             if np.all(self.graph_manager.online_status):
+                #change state
                 self.get_logger().info("Received odom message from all agents, changing state")
-                self.state += 1
-                self.graph_manager.set_setpoints() #TEMP!!
+                self.state = State.MAINLOOP
 
+                #make sure the drones have a z setpoint of 1
+                self.graph_manager.init_setpoints()
+
+                #process the edges now that every agent is online
+                self.graph_manager.calc_edges()
+                if self.edge_publisher.get_subscription_count() > 0:
+                    msg = Int32MultiArray()
+                    msg.data = [i for pair in self.graph_manager.get_edge() for i in pair]
+                    self.edge_publisher.publish(msg)
+
+                #set the starting time
                 self.start_time = self.get_clock().now().nanoseconds/1e9
                 self.prev_time = self.start_time
 
-        elif self.state == 1:
+        elif self.state == State.MAINLOOP:
             self.current_time = self.get_clock().now().nanoseconds/1e9
             self.delta_time = self.current_time - self.prev_time
             self.total_elapsed = self.current_time - self.start_time
             self.prev_time = self.current_time
 
-            msg = Int32MultiArray()
-            msg.data = [i for pair in self.edges for i in pair]
-            self.edge_publisher = self.create_publisher(Int32MultiArray, "/graph_edges", 10)
-            self.edge_publisher.publish(msg)
-
+            time_recalc = False
             for t in self.recalc_times:
-                if self.total_elapsed-self.delta_time < t and self.total_elapsed >= t:
+                if t not in self.triggered_times and self.total_elapsed >= t:
+                    self.triggered_times.append(t)
+                    time_recalc = True
+
+            #returns whether the edges have changed
+            edge_recalc = self.graph_manager.calc_edges() 
+
+            #publish edge data for the graph_rviz script if active
+            if edge_recalc and self.edge_publisher.get_subscription_count() > 0:
+                msg = Int32MultiArray()
+                msg.data = [i for pair in self.graph_manager.get_edge() for i in pair]
+                self.edge_publisher.publish(msg)
+
+            #publish task data for the graph_rviz script if active
+            if time_recalc and self.task_publisher.get_subscription_count() > 0:
+                tasks = self.task_manager.get_tasks(self.total_elapsed)
+
+                msg = TaskEdgeList()
+                for task in tasks:
+                    task_edge = TaskEdge()
+                    task_edge.start_idx = task[0][0]
+                    task_edge.end_idx = task[0][1]
+                    task_edge.agent_x = float(task[1][0])
+                    task_edge.agent_y = float(task[1][1])
+                    task_edge.agent_z = float(task[1][2])
+
+                    msg.task_list.append(task_edge)
+
+                self.task_publisher.publish(msg)
+
+            #-------------------------------
+            #    Main optimization logic
+            #-------------------------------
+            if time_recalc or edge_recalc:
+                if time_recalc:
                     self.get_logger().info("recaculating at: {}".format(self.total_elapsed))
 
-                    comm_graph = self.graph_manager.get_comm_graph()
-                    
+                #calculate the current relative tasks based on the current weighted communication graph
+                comm_graph = self.graph_manager.get_comm_graph()
+                weights = self.graph_manager.get_weights()
+                
+                task_paths, task_pos, task_rad = self.task_manager.obtain_current_tasks(
+                    self.total_elapsed, comm_graph, weights)
+
+                if task_paths and "impossible" not in task_paths: #only perform if not empty, and valid paths
                     agents = self.graph_manager.get_pos()
-                    task_paths, task_pos, task_rad = self.task_manager.obtain_current_tasks(self.total_elapsed, comm_graph)
+                    return_mode = "relative"
 
-                    if task_paths: #only perform if not empty, so there must be tasks
-                        return_mode = "relative"
+                    if Config.MODE == "2d":
+                        agents = agents[:,:2]
 
-                        if MODE == "2d":
-                            agents = agents[:,:2]
+                    pos_result = solve_task(agents, task_paths, task_pos, return_mode)
+                    rad_result = solve_radius(agents, task_paths, task_rad, return_mode)
 
-                        pos_result = solve_task(agents, task_paths, task_pos, return_mode)
-                        rad_result = solve_radius(agents, task_paths, task_rad, return_mode)
-
-                        self.graph_manager.compute_setpoint(pos_result)
-
-                        #plot results:
-                        pos_result = solve_task(agents, task_paths, task_pos, "absolute")
-                        results = self.graph_manager.get_pos()
-                        for idx, val in pos_result:
-                            results[idx][:2] = val[:2]
-                        self.graph_manager.show_graph(True, results) 
+                    self.graph_manager.compute_setpoint(pos_result)
+                else:
+                    if "impossible" in task_paths:
+                        self.get_logger().info("No valid communication graph at this time")
 
     def setpoint_update(self):
-        if self.state == 1:
+        if self.state == State.MAINLOOP:
             time = self.get_clock().now().nanoseconds
             time_sec = time / 1e9
 
             setpoints = self.graph_manager.get_setpoints()
-            msg = Odometry()
 
             for setpoint, pub in zip(setpoints, self.setpoint_publishers):
-                
+                msg = Odometry()
                 msg.pose.pose.position.x = setpoint[0]
                 msg.pose.pose.position.y = setpoint[1]
-                if MODE == "2d":
+                if Config.MODE == "2d":
                     msg.pose.pose.position.z = 1.#1+np.cos(time_sec)*0.5#setpoint[2]
-                elif MODE == "3d":
+                elif Config.MODE == "3d":
                     msg.pose.pose.position.z = setpoint[2]
 
                 pub.publish(msg)
 
 
+def signal_handler(sig, frame):
+    print("Shutdown signal received, cleaning up...")
+    rclpy.shutdown()
+    sys.exit(0)
+
+
 def main(args=None):
     rclpy.init(args=args)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
     manager = Manager()
-    rclpy.spin(manager)
+    #executor so subcriptions and publishers can use mutliple threads
+    executor = MultiThreadedExecutor()
+    executor.add_node(manager)
+    executor.spin()
     rclpy.shutdown()
 
 if __name__ == "__main__":

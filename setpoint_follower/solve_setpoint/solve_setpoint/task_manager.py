@@ -5,7 +5,7 @@ import dataclasses
 import numpy as np
 from dataclasses import dataclass
 
-from solve_setpoint.solvers.shortest_path import get_shortest_distance
+from solve_setpoint.solvers.shortest_path import dijkstra
 
 def flatten(xss):
     return [x for xs in xss for x in xs]
@@ -31,25 +31,29 @@ class TaskManager():
         timespans = [task.timespan for task in self.__tasks]
         return set(flatten(timespans))
 
-    def obtain_current_tasks(self, time, comm_graph):
+    def obtain_current_tasks(self, time, comm_graph, weights):
         active_tasks = []
         for task in self.__tasks:
             if time >= task.timespan[0] and time < task.timespan[1]:
                 active_tasks.append(task)
 
-        task_paths = [self.__relative_tasks(task, comm_graph) for task in active_tasks]
+        task_paths = [self.__relative_tasks(task, comm_graph, weights) for task in active_tasks]
         task_pos = [task.rel_position for task in active_tasks]
         task_rad = [10 for task in active_tasks]
 
         return (task_paths, task_pos, [task_rad])
     
 
-    def __relative_tasks(self, task: Task, comm_graph):
+    def __relative_tasks(self, task: Task, comm_graph, weights):
         """convert the absolute tasks to relative tasks, absolute tasks are defined between any agent
         relative tasks are defined between agents connected along the communication graph"""
-        shortest_path = get_shortest_distance(comm_graph, task.edges[0], task.edges[1], max(flatten(comm_graph))+1)
-        shortest_edges = [[shortest_path[i], shortest_path[i+1]] for i in range(len(shortest_path)-1)]
-        return shortest_edges
+        #shortest_path = get_shortest_distance(comm_graph, task.edges[0], task.edges[1], max(flatten(comm_graph))+1)
+        shortest_path = dijkstra(comm_graph, weights, task.edges[0], task.edges[1])
+        if shortest_path != "impossible":
+            shortest_edges = [[shortest_path[i], shortest_path[i+1]] for i in range(len(shortest_path)-1)]
+            return shortest_edges
+        else:
+            return "impossible"
 
     def load_task_path(self, task_path):
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -69,6 +73,14 @@ class TaskManager():
 
         with open(output_path, mode="w", encoding="utf-8") as write_file:
             written = json.dump(data, write_file)
+
+    def get_tasks(self, time):
+        active_tasks = []
+        for task in self.__tasks:
+            if time >= task.timespan[0] and time < task.timespan[1]:
+                active_tasks.append(task)
+
+        return[(task.edges, task.rel_position) for task in active_tasks] 
 
     def __repr__(self):
         return "{}".format(self.__tasks)

@@ -77,7 +77,6 @@ def solve_task(agents, task_paths, task_pos, return_mode):
     #-----------------------------------------------------------------------------
 
     if return_mode == "relative":
-        print("returning relative positions")
         _, A_idx = np.unique(A, axis=0, return_index=True)
         
         path_flattened = np.array([item for sublist in task_paths for item in sublist])
@@ -90,7 +89,6 @@ def solve_task(agents, task_paths, task_pos, return_mode):
         return resulting_task
 
     elif return_mode == "absolute":
-        print("returning absolute positions")
         resulting = [(used_agents[i], val) for i, val in enumerate(par_var.value)]
         return resulting
 
