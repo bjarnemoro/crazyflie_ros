@@ -25,11 +25,12 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 
 from launch_ros.actions import Node
-
-SDF_PATH = '/home/bmoro/Documents/crazyflies/ros2_ws/src/ros_gz_crazyflie/ros_gz_crazyflie_gazebo/models/crazyflie/model.sdf'
  
 
 def create_new_sdf(name):
+    pkg_project_gazebo = get_package_share_directory('ros_gz_crazyflie_gazebo')
+    SDF_PATH = os.path.join(pkg_project_gazebo, 'models/crazyflie/model.sdf')
+
     with open(SDF_PATH) as f:
         sdf = f.read()
 
@@ -37,76 +38,11 @@ def create_new_sdf(name):
 
     sdf = sdf.replace("<robotNamespace>crazyflie</robotNamespace>", "<robotNamespace>{}</robotNamespace>".format(name))
 
-    file = open("/home/bmoro/Documents/crazyflies/ros2_ws/src/ros_gz_crazyflie/ros_gz_crazyflie_gazebo/models/crazyflie/{}.sdf".format(name), "w")
+    filepath = os.path.join(pkg_project_gazebo, "models/crazyflie/{}.sdf".format(name))
+    file = open(filepath, "w")
     file.write(sdf)
-
-    # temp_sdf = tempfile.NamedTemporaryFile(mode='w+', dir='/home/bmoro/Documents/crazyflies/ros2_ws/src/ros_gz_crazyflie/ros_gz_crazyflie_gazebo/models/crazyflie'
-    #     , delete=False, suffix='.sdf')
-    # temp_sdf.write(sdf)
     
     return file
-
-def generate_bridge_nodes(drone_names):
-    bridge_nodes = []
-
-    bridges_per_drone = [
-        {
-            "ros_suffix": "/cmd_vel",
-            "gz_suffix": "/gazebo/command/twist",
-            "ros_type": "geometry_msgs/msg/Twist",
-            "gz_type": "gz.msgs.Twist",
-            "dir": "ROS_TO_GZ"
-        },
-        {
-            "ros_suffix": "/odom",
-            "gz_suffix": "/odometry",
-            "ros_type": "nav_msgs/msg/Odometry",
-            "gz_type": "gz.msgs.Odometry",
-            "dir": "GZ_TO_ROS"
-        },
-        {
-            "ros_suffix": "/scan",
-            "gz_suffix": "/lidar",
-            "ros_type": "sensor_msgs/msg/LaserScan",
-            "gz_type": "gz.msgs.LaserScan",  # <- USE gz.msgs.LaserScan
-            "dir": "GZ_TO_ROS"
-        },
-        # This bridge is not supported; remove it if using Pose_V/TFMessage
-        # {
-        #     "ros_suffix": "/tf",
-        #     "gz_suffix": "/pose",
-        #     "ros_type": "tf2_msgs/msg/TFMessage",
-        #     "gz_type": "gz.msgs.Pose_V",
-        #     "dir": "GZ_TO_ROS"
-        # },
-    ]
-
-    for drone in drone_names:
-        for bridge in bridges_per_drone:
-            ros_topic = f"/{drone}{bridge['ros_suffix']}"
-            if "model" in bridge["gz_suffix"]:
-                gz_topic = bridge["gz_suffix"].replace("crazyflie", drone)
-            else:
-                gz_topic = f"/model/{drone}{bridge['gz_suffix']}"
-
-            if bridge["dir"] == "GZ_TO_ROS":
-                arg = f"{gz_topic}@{bridge['gz_type']}[{bridge['ros_type']}]"
-            else:
-                arg = f"{ros_topic}@{bridge['ros_type']}[{bridge['gz_type']}]"
-
-            bridge_nodes.append(
-                Node(
-                    package="ros_gz_bridge",
-                    executable="parameter_bridge",
-                    name=f"{drone}_bridge_{bridge['ros_suffix'].strip('/')}",
-                    arguments=[arg],
-                    remappings=[(gz_topic, ros_topic)],
-                    output="screen"
-                )
-            )
-
-    return bridge_nodes
-
 
 def generate_bridge(drone_names):
     bridge_nodes = []
@@ -147,29 +83,17 @@ def generate_launch_description():
     pkg_project_gazebo = get_package_share_directory('ros_gz_crazyflie_gazebo')
     pkg_ros_gz_sim = get_package_share_directory('ros_gz_sim')
 
-    # Load the SDF file from "description" package
-    if LaunchConfiguration('gazebo_launch') == 'True':
-        gz_model_path = os.getenv('GZ_SIM_RESOURCE_PATH')
-        sdf_file  =  os.path.join(gz_model_path, 'crazyflie', 'model.sdf')
-        with open(sdf_file, 'r') as infp:
-            robot_desc = infp.read()
-
     # Setup to launch the simulator and Gazebo world
     gz_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_ros_gz_sim, 'launch', 'gz_sim.launch.py')),
             condition=IfCondition(LaunchConfiguration('gazebo_launch')),
-        launch_arguments={'gz_args': PathJoinSubstitution([
-            pkg_project_gazebo,
-            'worlds',
-            'crazyflie_world_10.sdf -r'
-        ])}.items(),
+        launch_arguments={'gz_args': os.path.join(pkg_project_gazebo, 'worlds', 
+        'crazyflie_world_10.sdf') + ' -r'}.items(),
     )
 
     #bridge_nodes = generate_bridge_nodes(drones)
-    drones = ["crazyflie1", "crazyflie2", "crazyflie3", 
-    "crazyflie4", "crazyflie5", "crazyflie6",
-    "crazyflie7", "crazyflie8", "crazyflie9", "crazyflie10"]
+    drones = ['crazyflie{}'.format(i) for i in range(1,11)]
     pos2 = [
         ('1.0', '0.5', '0'),
         ('1.0', '-0.5', '0'),
@@ -223,20 +147,15 @@ def generate_launch_description():
         )
         cmd_bridges.append(cmd_bridge)
 
-    control_nodes = []
+    tf_bridges = []
     for drone in drones:
-        control = Node(
-            package='ros_gz_crazyflie_control',
-            executable='control_services',
-            output='screen',
-            parameters=[
-                {'hover_height': 0.5},
-                {'robot_prefix': '/{}'.format(drone)},
-                {'incoming_twist_topic': '/cmd_vel'},
-                {'max_ang_z_rate': 0.4},
-            ]
+        tf_node = Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            arguments=['0', '0', '0', '0', '0', '0', 'world', '{}/odom'.format(drone)],
+            output='screen'
         )
-        control_nodes.append(control)
+        tf_bridges.append(tf_node)
 
     return LaunchDescription([
         gz_ln_arg,
@@ -244,7 +163,5 @@ def generate_launch_description():
         clock_bridge,
         *gen_nodes,
         *drone_spawns,
-        #*cmd_bridges,
-        #*bridge_nodes,
-        *control_nodes        
+        *tf_bridges      
         ])
