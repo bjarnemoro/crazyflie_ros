@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-package_name = 'follow_setpoint'
+package_name = 'incorporate_barrier'
 
 setup(
     name=package_name,
@@ -13,13 +13,14 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='bmoro',
-    maintainer_email='bmoro@todo.todo',
+    maintainer='bjarnemoro',
+    maintainer_email='bjarne.moro@gmail.com',
     description='TODO: Package description',
     license='TODO: License declaration',
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'follower = follow_setpoint.follower:main'
+            'barrier_dev = incorporate_barrier.barrier_dev:main',
         ],
     },
 )
