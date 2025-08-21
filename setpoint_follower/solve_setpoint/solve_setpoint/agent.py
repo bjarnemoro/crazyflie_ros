@@ -9,7 +9,7 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
 from rclpy.executors import MultiThreadedExecutor
 
-from solve_setpoint.config import Config
+from barrier_msg.msg import Config
 
 class Agent(Node):
     def __init__(self, drone):
@@ -74,7 +74,7 @@ def main(args=None):
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    drones = ['/crazyflie{}'.format(i) for i in range(1,Config.NUM_DRONES+1)]
+    drones = ['/crazyflie{}'.format(i) for i in range(1,Config.NUM_AGENTS+1)]
     agents = [Agent(drone) for drone in drones]
 
     executor = MultiThreadedExecutor()

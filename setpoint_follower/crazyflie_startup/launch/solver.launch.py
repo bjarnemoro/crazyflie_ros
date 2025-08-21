@@ -37,23 +37,6 @@ def generate_launch_description():
         ]
     )
 
-    drones = ['/crazyflie{}'.format(i) for i in range(1,11)]
-
-    # agent_node_list = []
-    # for drone in drones:
-
-    #     agent_node = Node(
-    #         package='solve_setpoint',
-    #         executable='agent',
-    #         name='agent_{}'.format(drone),
-    #         output='screen',
-    #         parameters=[
-    #             {'robot_prefix': '/{}'.format(drone)},
-    #             {'use_sim_time': True}
-    #         ]
-    #     )
-
-    #     agent_node_list.append(agent_node)
     agent_node = Node(
             package='solve_setpoint',
             executable='agent',
@@ -63,9 +46,21 @@ def generate_launch_description():
                 {'use_sim_time': True}
             ]
         )
+    
+    barrier_service = Node(
+        package='barrier_builder',
+        executable='barrier_server',
+        name='barrier_service',
+        output='screen',
+        parameters=[
+            {'robot_prefix': '/barrier_service'},
+            {'use_sim_time': True}
+        ]
+    )
 
     return LaunchDescription([
         crazyflie_simulation,
         agent_node,
+        barrier_service,
         manager_node
         ])

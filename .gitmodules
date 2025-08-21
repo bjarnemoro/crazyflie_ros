@@ -1,0 +1,6 @@
+[submodule "setpoint_follower/barrier_constructor_interface"]
+	path = setpoint_follower/barrier_constructor_interface
+	url = https://github.com/gregoriomarchesini/barrier_constructor_interface.git
+[submodule "setpoint_follower/barrier_builder"]
+	path = setpoint_follower/barrier_builder
+	url = https://github.com/gregoriomarchesini/barrier_builder.git

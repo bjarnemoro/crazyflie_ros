@@ -3,7 +3,9 @@ import json
 import time
 import dataclasses
 import numpy as np
+from collections import  defaultdict
 from dataclasses import dataclass
+from barrier_msg.msg import BMsg, TMsg
 
 from solve_setpoint.solvers.shortest_path import dijkstra
 
@@ -39,9 +41,14 @@ class TaskManager():
 
         task_paths = [self.__relative_tasks(task, comm_graph, weights) for task in active_tasks]
         task_pos = [task.rel_position for task in active_tasks]
-        task_rad = [10 for task in active_tasks]
+        task_rad = [[10 for i in range(2*len(task.rel_position))] for task in active_tasks]
 
-        return (task_paths, task_pos, [task_rad])
+        self.time_lookup = defaultdict(list)
+        for task, path in zip(active_tasks, task_paths):
+            for edge in path:
+                self.time_lookup[tuple(edge)].append(task.timespan)
+
+        return (task_paths, task_pos, task_rad)
     
 
     def __relative_tasks(self, task: Task, comm_graph, weights):
@@ -63,7 +70,6 @@ class TaskManager():
             task_dicts = json.load(read_file)
 
         self.__tasks = [Task(**d) for d in task_dicts]
-        print(self.__tasks)
 
     def save_tasks(self, task_path):
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -80,7 +86,23 @@ class TaskManager():
             if time >= task.timespan[0] and time < task.timespan[1]:
                 active_tasks.append(task)
 
-        return[(task.edges, task.rel_position) for task in active_tasks] 
+        return[(task.edges, task.rel_position) for task in active_tasks]
+    
+    def get_tmsg(self, t, edge_pos, edge_box):
+        msgs = []
+        for edge, pos in edge_pos:
+            for timespan in self.time_lookup[tuple(edge)]:
+                tmsg = TMsg()
+                tmsg.center.extend([float(e) for e in pos])
+                tmsg.size = 10.
+                tmsg.start = float(timespan[0] - t+5)
+                tmsg.end = float(timespan[1] - t+5)
+                tmsg.edge_i = int(edge[0])
+                tmsg.edge_j = int(edge[1])
+                tmsg.type = "always"
+                msgs.append(tmsg)
+
+        return msgs
 
     def __repr__(self):
         return "{}".format(self.__tasks)

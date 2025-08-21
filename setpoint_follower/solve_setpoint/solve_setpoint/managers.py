@@ -8,13 +8,14 @@ from nav_msgs.msg import Odometry
 from std_msgs.msg import Int32MultiArray
 from rclpy.executors import MultiThreadedExecutor
 from msg_interface.msg import TaskEdge, TaskEdgeList
+from barrier_msg.srv import BCompSrv
+from barrier_msg.msg import BMsg, TMsg
+from barrier_msg.msg import Config
+#from solve_setpoint.config import Config
 
-from solve_setpoint.config import Config
 from solve_setpoint.graph_manager import GraphManager
 from solve_setpoint.task_manager import TaskManager, Task
-from solve_setpoint.solvers.task_solver import solve_task
-from solve_setpoint.solvers.radius_solver import solve_radius
-
+from solve_setpoint.solvers.combined_solve import solve_combined
 
 class State:
     START_DRONE = 0
@@ -32,14 +33,16 @@ class Manager(Node):
         self.declare_parameter('robot_prefix', '/manager')
         self.robot_prefix = self.get_parameter('robot_prefix').value
 
+        self.get_logger().info(f"{Config.DIM}")
+
         #setup the tasks that are to be done
-        if Config.MODE == "2d":
+        if Config.DIM == 2:
             self.tasks = [
                 Task([4,9], [0,9], [-2,-1]),
                 Task([4,9], [4, 5], [0, 1.6]),
                 Task([10,13], [1,8], [-2, 1]),
                 Task([10,13], [7,2], [0.2, 1.6])]
-        elif Config.MODE == "3d":
+        elif Config.DIM == 3:
             self.tasks = [
                 Task([4,9], [0,9], [-2,-1, 1]),
                 Task([4,9], [4,5], [0, 1.6, 0.5]),
@@ -52,15 +55,19 @@ class Manager(Node):
 
         self.recalc_times = self.task_manager.recalculate_at()
         self.triggered_times = set()
-        self.setpoints = np.zeros((Config.NUM_DRONES, 3))
+        self.setpoints = np.zeros((Config.NUM_AGENTS, 3))
 
         #setup all the subscribers and publishers
-        self.drones = ['/crazyflie{}'.format(i) for i in range(1,Config.NUM_DRONES+1)]
+        self.drones = ['/crazyflie{}'.format(i) for i in range(1,Config.NUM_AGENTS+1)]
         self.odom_subscribers = []
         self.setpoint_publishers = []
 
         self.edge_publisher = self.create_publisher(Int32MultiArray, "/graph_edges", 10)
         self.task_publisher = self.create_publisher(TaskEdgeList, "/task_edges", 10)
+
+        self.barrier_client = self.create_client(BCompSrv, '/compute_barriers')
+        while not self.barrier_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('service not available, waiting again...')
         
         for i, drone in enumerate(self.drones):
             callback = lambda msg, idx=i: self.graph_manager.set_pos_callback(msg, idx)
@@ -76,6 +83,23 @@ class Manager(Node):
         #set the starting state
         self.state = State.START_DRONE
         self.get_logger().info("\n\nStarting manager!!\n\n")
+        #self.get_logger().info(f"{self.barrier_client}")
+        self.test_client()
+
+    def test_client(self):
+        pass
+        #self.req = BCompSrv.Request()
+        #tmsg = TMsg()
+        #self.req.messages.append(tmsg)
+        #self.future = self.barrier_client.call_async(self.req)
+        #self.future.add_done_callback(self.my_callback)
+
+    def my_callback(self, future):
+        try:
+            response = future.result()
+            self.get_logger().info(f"Service response:{response}")
+        except Exception as e:
+            self.get_logger().info(f"Service call failed: {e}", )
 
     def mainloop(self):
         if self.state == State.START_DRONE:
@@ -108,7 +132,7 @@ class Manager(Node):
             time_recalc = False
             for t in self.recalc_times:
                 if t not in self.triggered_times and self.total_elapsed >= t:
-                    self.triggered_times.append(t)
+                    self.triggered_times.add(t)
                     time_recalc = True
 
             #returns whether the edges have changed
@@ -131,7 +155,10 @@ class Manager(Node):
                     task_edge.end_idx = task[0][1]
                     task_edge.agent_x = float(task[1][0])
                     task_edge.agent_y = float(task[1][1])
-                    task_edge.agent_z = float(task[1][2])
+                    if Config.DIM==2:
+                        task_edge.agent_z = 0.
+                    else:
+                        task_edge.agent_z = float(task[1][2])
 
                     msg.task_list.append(task_edge)
 
@@ -148,20 +175,33 @@ class Manager(Node):
                 comm_graph = self.graph_manager.get_comm_graph()
                 weights = self.graph_manager.get_weights()
                 
-                task_paths, task_pos, task_rad = self.task_manager.obtain_current_tasks(
+                task_paths, task_pos, task_box = self.task_manager.obtain_current_tasks(
                     self.total_elapsed, comm_graph, weights)
 
                 if task_paths and "impossible" not in task_paths: #only perform if not empty, and valid paths
                     agents = self.graph_manager.get_pos()
                     return_mode = "relative"
 
-                    if Config.MODE == "2d":
+                    if Config.DIM == 2:
                         agents = agents[:,:2]
 
-                    pos_result = solve_task(agents, task_paths, task_pos, return_mode)
-                    rad_result = solve_radius(agents, task_paths, task_rad, return_mode)
+                    #pos_result = solve_task(agents, task_paths, task_pos, return_mode)
+                    #rad_result = solve_radius(agents, task_paths, task_rad, return_mode)
 
-                    self.graph_manager.compute_setpoint(pos_result)
+                    succes, pos_result, box_result = solve_combined(task_paths, task_pos, task_box, return_mode)
+
+                    if succes:
+                        self.graph_manager.compute_setpoint(pos_result)
+                        
+                        #compute the barrier function
+                        self.req = BCompSrv.Request()
+                        tmsg_list = self.task_manager.get_tmsg(self.total_elapsed, pos_result, box_result)
+                        self.req.messages.extend(tmsg_list)
+                        future = self.barrier_client.call_async(self.req)
+                        future.add_done_callback(self.my_callback)
+                        self.get_logger().info(f"{future}")
+                    else:
+                        self.get_logger().info("The optimization failed")
                 else:
                     if "impossible" in task_paths:
                         self.get_logger().info("No valid communication graph at this time")
@@ -177,9 +217,9 @@ class Manager(Node):
                 msg = Odometry()
                 msg.pose.pose.position.x = setpoint[0]
                 msg.pose.pose.position.y = setpoint[1]
-                if Config.MODE == "2d":
+                if Config.DIM == 2:
                     msg.pose.pose.position.z = 1.#1+np.cos(time_sec)*0.5#setpoint[2]
-                elif Config.MODE == "3d":
+                elif Config.DIM == 2:
                     msg.pose.pose.position.z = setpoint[2]
 
                 pub.publish(msg)
