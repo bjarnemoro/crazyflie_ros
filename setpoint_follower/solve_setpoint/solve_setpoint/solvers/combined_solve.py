@@ -171,4 +171,4 @@ def solve_combined(task_paths: np.ndarray, task_pos: np.ndarray, task_box: np.nd
 
 
     if return_mode == "absolute":
-        pass
+        return agent_pos.value
