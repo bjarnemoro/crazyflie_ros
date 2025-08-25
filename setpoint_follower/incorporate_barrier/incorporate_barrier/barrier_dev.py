@@ -5,6 +5,7 @@ import signal
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+from matplotlib import colors as mcolors
 
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
@@ -38,13 +39,13 @@ class BarrierDev(Node):
         task_box = [[10, 10, 10, 10], [10, 10, 10, 10], [10, 10, 10, 10]]
         return_mode = "relative"
 
-        succes, edge_pos, edge_box = solve_combined(task_paths, task_pos, task_box, return_mode)
+        succes, self.edge_pos, edge_box = solve_combined(task_paths, task_pos, task_box, return_mode)
         self.abs_pos = solve_combined(task_paths, task_pos, task_box, "absolute")
 
-        self.get_logger().info(f'{edge_pos}')
+        self.get_logger().info(f'{self.edge_pos}')
         self.get_logger().info(f'{edge_box}')
 
-        for (edge, pos), (_, box) in zip(edge_pos, edge_box):
+        for (edge, pos), (_, box) in zip(self.edge_pos, edge_box):
             tmsg = TMsg()
             #box_transposed = [box[0]+pos[0], -box[1]+pos[0], box[2]+pos[1], -box[3]+pos[1]]
             #self.get_logger().info(f'{box_transposed}')
@@ -89,6 +90,55 @@ class BarrierDev(Node):
     def dummy_loop(self):
         pass
 
+    def abs_from_rel(self, edge_rel):
+        edges = [edge for edge, _ in edge_rel]
+        idx1 = [idx[0] for idx in edges]
+        idx2 = [idx[1] for idx in edges]
+        start_idx = [idx for idx in idx1 if idx not in idx2]
+
+        paths = [start_idx.copy()]
+
+        def traverse(vals: list):
+            tot_vals = []
+            for a_val in vals:
+                new_idx = [i for i, val in enumerate(idx1) if val == a_val]
+                new_vals = [val for i, val in enumerate(idx2) if i in new_idx]
+                tot_vals.extend(new_vals)
+
+                for i, val in enumerate(new_vals):
+                    #self.get_logger().info(f"{paths}")
+                    if i < 1:
+                        #set current path in first iteration
+                        current_path = [path for path in paths if path[-1] == a_val][0]
+                        current_path.append(val)
+                    else:
+                        paths.append(current_path.copy())
+                        paths[-1][-1] = val
+
+                    
+                    self.get_logger().info(f"{paths}")
+                        
+
+            return tot_vals
+
+        new_vals = start_idx
+
+        for i in range(len(edge_rel)):  
+            new_vals = traverse(new_vals)
+            if not new_vals:
+                break
+        
+        positions = {}
+        rel_pos = np.array([rel for _, rel in edge_rel])
+        for path in paths:
+            for i in range(len(path)):
+                my_path = path[:i+1]
+                indices = [i for i, val in enumerate(idx2) if val in my_path]
+                sum = np.sum(rel_pos[indices], axis=0)
+                positions[my_path[-1]] = sum
+
+        return positions
+
 def flatten(x):
     return [item for e in x for item in e]
 
@@ -105,14 +155,16 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 #chatGPT animation
-def animate_msgs(node):
+def animate_msgs(node, pos):
     fig, ax = plt.subplots()
 
     # Timesteps only (all msgs will be drawn for each t)
-    timesteps = [i / 25 for i in range(50)]
+    timesteps = np.linspace(1, 2.5, 50)
 
-    ax.set_xlim(0, 20)  # Adjust based on your data
-    ax.set_ylim(-10, 10)
+    ax.set_xlim(-10, 40)  # Adjust based on your data
+    ax.set_ylim(-20, 20)
+    print(plt.colormaps['Pastel1'].colors)
+    ax.scatter(node.abs_pos[:,0], node.abs_pos[:,1])
 
     plotted_lines = []
 
@@ -130,10 +182,11 @@ def animate_msgs(node):
         plotted_lines.clear()
 
         # Draw all msgs at timestep t
-        for msg in node.msgs:
-            hypercube = msg.compute_offset_vector(t)
-            lines = poly_lines(get_vertices(hypercube))
-            plotted_lines += ax.plot(*lines, color='blue')
+        for i, ((edge, _), msg) in enumerate(zip(node.edge_pos, node.msgs)):
+            cube = msg.compute_offset_vector(t)
+            cube_trans = [cube[0] + pos[edge[0]][0], cube[1] + pos[edge[0]][0], cube[2] + pos[edge[0]][1], cube[3] + pos[edge[0]][1]]
+            lines = poly_lines(get_vertices(cube_trans))
+            plotted_lines += ax.plot(*lines, color="blue")
 
         return plotted_lines
 
@@ -144,6 +197,9 @@ def animate_msgs(node):
     ani.save("barrier_service.mp4")
     plt.show()
     return ani
+
+    
+
 
 
 def main(args=None):
@@ -162,23 +218,24 @@ def main(args=None):
     executor.spin_once()
     time.sleep(1)
 
-    # for msg in node.msgs:
-    #     for t in [i/5 for i in range(10)]:
-    #         hypercube = msg.compute_offset_vector(t)
-    #         print(hypercube)
-    #         lines = poly_lines(get_vertices(hypercube))
-    #         plt.plot(*lines)
-    #         print("a")
+    animate_msgs(node, node.abs_from_rel(node.edge_pos))
 
+
+    # plt.scatter(node.abs_pos[:,0], node.abs_pos[:,1])
+    # indices = [[0, 1], [1, 2], [2, 3], [2, 4], [4, 5]]
+    # pos_list = [[node.abs_pos[idx[0],i], node.abs_pos[idx[1],i]] for idx in indices for i in range(2)]
+    # plt.plot(*pos_list)
     # plt.show()
-    animate_msgs(node)
 
-
-    plt.scatter(node.abs_pos[:,0], node.abs_pos[:,1])
-    indices = [[0, 1], [1, 2], [2, 3], [2, 4], [4, 5]]
-    pos_list = [[node.abs_pos[idx[0],i], node.abs_pos[idx[1],i]] for idx in indices for i in range(2)]
-    plt.plot(*pos_list)
-    plt.show()
+    # pos = node.abs_from_rel(node.edge_pos)
+    # for (edge, _), msg in zip(node.edge_pos, node.msgs):
+    #     cube = msg.compute_offset_vector(2.49)
+    #     cube_trans = [cube[0] + pos[edge[0]][0], cube[1] + pos[edge[0]][0], cube[2] + pos[edge[0]][1], cube[3] + pos[edge[0]][1]]
+    #     lines = poly_lines(get_vertices(cube_trans))
+    #     plt.plot(*lines, color='blue')
+        
+    # plt.scatter(node.abs_pos[:,0], node.abs_pos[:,1])
+    # plt.show()
 
     sys.exit(0)
     # try:
