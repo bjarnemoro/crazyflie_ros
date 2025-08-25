@@ -66,3 +66,31 @@ class bMsg:
 
 
         return self.slopes @ tt + self.gamma0 + self.b_vector #-> this is what you willl put in the MPC as Ax <= (self.slopes @ tt + self.gamma0 + self.b_vector)
+
+
+class HyperCubeHandler(bMsg):
+    def __init__(self,
+                 slopes:   list[float],
+                 gamma0:   list[float],
+                 r:        float,
+                 slack:    float,
+                 b_vector: list[float],
+                 time_grid:list[float],
+                 task_id:  int,
+                 edge_i:   int,
+                 edge_j:   int):
+
+        super().__init__(slopes, gamma0, r, slack, b_vector, time_grid, task_id, edge_i, edge_j)
+        self.neighbour = None
+        
+
+    def add_neighbour(self, neighbour):
+        self.neighbour = neighbour
+
+    def get_offset(self, t):
+        print(self.edge_i, self.edge_j, not self.neighbour)
+        if self.neighbour is not None:
+            offset = self.neighbour.get_offset(t)
+            return self.compute_offset_vector(t) + offset
+        else:
+            return self.compute_offset_vector(t) 

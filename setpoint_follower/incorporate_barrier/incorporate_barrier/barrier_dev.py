@@ -13,7 +13,7 @@ from rclpy.executors import MultiThreadedExecutor
 from barrier_msg.srv import BCompSrv
 from barrier_msg.msg import BMsg, TMsg
 
-from incorporate_barrier.bMsg import bMsg
+from incorporate_barrier.bMsg import bMsg, HyperCubeHandler
 from solve_setpoint.solvers.combined_solve import solve_combined
 
 class BarrierDev(Node):
@@ -69,7 +69,7 @@ class BarrierDev(Node):
             response = future.result()
 
             for bmsg in response.messages:
-                my_msg = bMsg(
+                my_msg = HyperCubeHandler(
                     bmsg.slopes, 
                     bmsg.gamma0, 
                     bmsg.r, 
@@ -82,6 +82,15 @@ class BarrierDev(Node):
                 
                 self.msgs.append(my_msg)
 
+            for bmsg in self.msgs:
+                candidates = [bmsg2 for bmsg2 in self.msgs if bmsg2.edge_j == bmsg.edge_i]
+                if candidates:
+                    bmsg.add_neighbour(candidates[0])
+
+            for bmsg in self.msgs:
+                if bmsg.neighbour is not None:
+                    print(bmsg.neighbour.edge_i, bmsg.neighbour.edge_j, bmsg.edge_i, bmsg.edge_j) 
+
         except Exception as e:
             self.get_logger().info(f"Service call failed: {e}", )
 
@@ -90,7 +99,7 @@ class BarrierDev(Node):
     def dummy_loop(self):
         pass
 
-    def abs_from_rel(self, edge_rel):
+    def abs_from_rel(self, edge_rel, hypercubes):
         edges = [edge for edge, _ in edge_rel]
         idx1 = [idx[0] for idx in edges]
         idx2 = [idx[1] for idx in edges]
@@ -182,8 +191,8 @@ def animate_msgs(node, pos):
         plotted_lines.clear()
 
         # Draw all msgs at timestep t
-        for i, ((edge, _), msg) in enumerate(zip(node.edge_pos, node.msgs)):
-            cube = msg.compute_offset_vector(t)
+        for (edge, _), msg in zip(node.edge_pos, node.msgs):
+            cube = msg.get_offset(t)
             cube_trans = [cube[0] + pos[edge[0]][0], cube[1] + pos[edge[0]][0], cube[2] + pos[edge[0]][1], cube[3] + pos[edge[0]][1]]
             lines = poly_lines(get_vertices(cube_trans))
             plotted_lines += ax.plot(*lines, color="blue")
@@ -218,7 +227,9 @@ def main(args=None):
     executor.spin_once()
     time.sleep(1)
 
-    animate_msgs(node, node.abs_from_rel(node.edge_pos))
+    #hypercubes = node.msgs[0].c
+    print(node.msgs[-1].get_offset(0.1))
+    animate_msgs(node, node.abs_from_rel(node.edge_pos, None))
 
 
     # plt.scatter(node.abs_pos[:,0], node.abs_pos[:,1])
