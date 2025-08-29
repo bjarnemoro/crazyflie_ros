@@ -11,8 +11,10 @@ from msg_interface.msg import TaskEdge, TaskEdgeList
 from barrier_msg.srv import BCompSrv
 from barrier_msg.msg import BMsg, TMsg
 from barrier_msg.msg import Config
+from incorporate_barrier.MPC_barrier import optimize_path
 #from solve_setpoint.config import Config
 
+from solve_setpoint.bMsg import bMsg, HyperCubeHandler
 from solve_setpoint.graph_manager import GraphManager
 from solve_setpoint.task_manager import TaskManager, Task
 from solve_setpoint.solvers.combined_solve import solve_combined
@@ -40,6 +42,17 @@ class Manager(Node):
             self.tasks = [
                 Task([4,9], [0,9], [-2,-1]),
                 Task([4,9], [4, 5], [0, 1.6]),
+                Task([10,13], [1,8], [-2, 1]),
+                Task([10,13], [7,2], [0.2, 1.6])]
+            self.tasks = [
+                Task([4,9], [5,8], [0,-1]),
+                Task([4,9], [8,6], [0,-1]),
+                Task([4,9], [6,9], [0,-1]),
+                Task([4,9], [9,7], [0,-1]),
+                #Task([4,9], [6,3], [1,1]),
+                #Task([4,9], [6,1], [1,-1]),
+                #Task([4,9], [6, 0], [-1, 1]),
+                #Task([4,9], [6, 1], [1, 1]),
                 Task([10,13], [1,8], [-2, 1]),
                 Task([10,13], [7,2], [0.2, 1.6])]
         elif Config.DIM == 3:
@@ -79,6 +92,8 @@ class Manager(Node):
         self.timer = self.create_timer(Config.MAIN_TIMER, self.mainloop)
         self.setpoint_timer = self.create_timer(Config.SETPOINT_TIMER, self.setpoint_update)
         self.once = True
+
+        self.x = None
             
         #set the starting state
         self.state = State.START_DRONE
@@ -96,10 +111,35 @@ class Manager(Node):
 
     def my_callback(self, future):
         try:
+            self.msgs = []
             response = future.result()
-            self.get_logger().info(f"Service response:{response}")
+
+            for bmsg in response.messages:
+                my_msg = HyperCubeHandler(
+                    bmsg.slopes, 
+                    bmsg.gamma0, 
+                    bmsg.r, 
+                    bmsg.slack, 
+                    bmsg.b_vector, 
+                    bmsg.time_grid, 
+                    bmsg.task_id, 
+                    bmsg.edge_i, 
+                    bmsg.edge_j)
+                
+                self.msgs.append(my_msg)
+
+            for bmsg in self.msgs:
+                candidates = [bmsg2 for bmsg2 in self.msgs if bmsg2.edge_j == bmsg.edge_i]
+                if candidates:
+                    bmsg.add_neighbour(candidates[0])
+
         except Exception as e:
             self.get_logger().info(f"Service call failed: {e}", )
+
+        HORIZON = 100
+        DT = 0.1
+
+        self.x = optimize_path(HORIZON, self.msgs, [i for i in range(10)], DT)
 
     def mainloop(self):
         if self.state == State.START_DRONE:
@@ -219,10 +259,31 @@ class Manager(Node):
                 msg.pose.pose.position.y = setpoint[1]
                 if Config.DIM == 2:
                     msg.pose.pose.position.z = 1.#1+np.cos(time_sec)*0.5#setpoint[2]
-                elif Config.DIM == 2:
+                elif Config.DIM == 3:
                     msg.pose.pose.position.z = setpoint[2]
 
                 pub.publish(msg)
+
+    def setpoint_update_MPC(self):
+        if self.state == State.MAINLOOP:
+            time = self.get_clock().now().nanoseconds
+            time_sec = time / 1e9
+
+            if self.x is not None:
+                idx = int(time_sec * 10)
+
+                if idx < 100:
+                    for i, pub in enumerate(self.setpoint_publishers):
+                        msg = Odometry()
+                        msg.pose.pose.position.x = self.x[idx, i*2]
+                        msg.pose.pose.position.y = self.x[idx, i*2+1]
+                        if Config.DIM == 2:
+                            msg.pose.pose.position.z = 1.#1+np.cos(time_sec)*0.5#setpoint[2]
+                        elif Config.DIM == 3:
+                            msg.pose.pose.position.z = self.x[idx, i*2+2]
+
+                        pub.publish(msg)
+
 
 
 def signal_handler(sig, frame):

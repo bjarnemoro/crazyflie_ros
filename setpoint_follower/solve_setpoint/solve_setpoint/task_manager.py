@@ -6,6 +6,7 @@ import numpy as np
 from collections import  defaultdict
 from dataclasses import dataclass
 from barrier_msg.msg import BMsg, TMsg
+from barrier_msg.msg import Config
 
 from solve_setpoint.solvers.shortest_path import dijkstra
 
@@ -94,7 +95,7 @@ class TaskManager():
             for timespan in self.time_lookup[tuple(edge)]:
                 tmsg = TMsg()
                 tmsg.center.extend([float(e) for e in pos])
-                tmsg.size = 10.
+                tmsg.size.extend([10. for _ in range(Config.DIM * 2)])
                 tmsg.start = float(timespan[0] - t+5)
                 tmsg.end = float(timespan[1] - t+5)
                 tmsg.edge_i = int(edge[0])
