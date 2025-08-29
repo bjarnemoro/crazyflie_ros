@@ -14,7 +14,14 @@ from barrier_msg.srv import BCompSrv
 from barrier_msg.msg import BMsg, TMsg
 
 from incorporate_barrier.bMsg import bMsg, HyperCubeHandler
+from incorporate_barrier.MPC_barrier import optimize_path
 from solve_setpoint.solvers.combined_solve import solve_combined
+
+
+END = 5.4
+STEPS = 100
+DT = END / STEPS 
+
 
 class BarrierDev(Node):
     def __init__(self):
@@ -34,16 +41,13 @@ class BarrierDev(Node):
         self.req = BCompSrv.Request()
         
 
-        task_paths = [[[3, 0], [0, 1], [1, 2]], [[0, 1], [1, 4]], [[4, 5]]]
-        task_pos = [[20, 10], [10, -10], [15, 0]]
-        task_box = [[10, 10, 10, 10], [10, 10, 10, 10], [10, 10, 10, 10]]
+        self.task_paths = [[[3, 0], [0, 1], [1, 2]], [[0, 1], [1, 4]], [[4, 5], [5, 6], [6, 7]], [[4, 5]]]
+        task_pos = [[20, 10], [10, -10], [15, 0], [10, -10]]
+        task_box = [[20, 20, 20, 20], [10, 10, 10, 10], [10, 10, 10, 10], [10, 10, 10, 10]]
         return_mode = "relative"
 
-        succes, self.edge_pos, edge_box = solve_combined(task_paths, task_pos, task_box, return_mode)
-        self.abs_pos = solve_combined(task_paths, task_pos, task_box, "absolute")
-
-        self.get_logger().info(f'{self.edge_pos}')
-        self.get_logger().info(f'{edge_box}')
+        succes, self.edge_pos, edge_box = solve_combined(self.task_paths, task_pos, task_box, return_mode)
+        self.abs_pos = solve_combined(self.task_paths, task_pos, task_box, "absolute")
 
         for (edge, pos), (_, box) in zip(self.edge_pos, edge_box):
             tmsg = TMsg()
@@ -51,8 +55,8 @@ class BarrierDev(Node):
             #self.get_logger().info(f'{box_transposed}')
             tmsg.center.extend(pos)
             tmsg.size.extend(box)
-            tmsg.start = 2.
-            tmsg.end = 3.
+            tmsg.start = 5.
+            tmsg.end = 6.
             tmsg.edge_i = int(edge[0])
             tmsg.edge_j = int(edge[1])
             tmsg.type = "always"
@@ -60,7 +64,6 @@ class BarrierDev(Node):
 
         future = self.barrier_client.call_async(self.req)
         future.add_done_callback(self.my_callback)
-        self.get_logger().info(f"{future}")
 
     def my_callback(self, future):
 
@@ -87,12 +90,18 @@ class BarrierDev(Node):
                 if candidates:
                     bmsg.add_neighbour(candidates[0])
 
-            for bmsg in self.msgs:
-                if bmsg.neighbour is not None:
-                    print(bmsg.neighbour.edge_i, bmsg.neighbour.edge_j, bmsg.edge_i, bmsg.edge_j) 
-
         except Exception as e:
             self.get_logger().info(f"Service call failed: {e}", )
+
+    def used_agent(self):
+        used_agents = []
+        for task_path in self.task_paths:
+            for vals in task_path:
+                for i in range(2):
+                    if vals[i] not in used_agents:
+                        used_agents.append(vals[i])
+
+        return used_agents
 
         
 
@@ -123,9 +132,6 @@ class BarrierDev(Node):
                     else:
                         paths.append(current_path.copy())
                         paths[-1][-1] = val
-
-                    
-                    self.get_logger().info(f"{paths}")
                         
 
             return tot_vals
@@ -164,50 +170,51 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 #chatGPT animation
-def animate_msgs(node, pos):
+def animate_msgs(node, pos, timesteps):
     fig, ax = plt.subplots()
 
-    # Timesteps only (all msgs will be drawn for each t)
-    timesteps = np.linspace(1, 2.5, 50)
+    x_indices = [i * 2 for i in range(len(pos[0]) // 2)]
+    y_indices = [i * 2 + 1 for i in range(len(pos[0]) // 2)]
 
-    ax.set_xlim(-10, 40)  # Adjust based on your data
+    agents = node.used_agent()
+
+    ax.set_xlim(-20, 30)
     ax.set_ylim(-20, 20)
-    print(plt.colormaps['Pastel1'].colors)
-    ax.scatter(node.abs_pos[:,0], node.abs_pos[:,1])
 
+
+    #scatter = ax.scatter(pos[0][x_indices], pos[0][y_indices])
+    scatter = ax.scatter([], [])
     plotted_lines = []
 
     def init():
-        """Initialize animation (clear plot)."""
-        return plotted_lines
+        return []
 
-    def update(t):
-        """Update plot for timestep t."""
-        nonlocal plotted_lines
+    def update(k):
+        t = timesteps[k]
 
         # Remove previously drawn lines
-        for line in plotted_lines:
-            line.remove()
-        plotted_lines.clear()
+        while plotted_lines:
+            plotted_lines.pop().remove()
 
-        # Draw all msgs at timestep t
+        # Draw all messages at timestep t
         for (edge, _), msg in zip(node.edge_pos, node.msgs):
-            cube = msg.get_offset(t)
-            cube_trans = [cube[0] + pos[edge[0]][0], cube[1] + pos[edge[0]][0], cube[2] + pos[edge[0]][1], cube[3] + pos[edge[0]][1]]
-            lines = poly_lines(get_vertices(cube_trans))
-            plotted_lines += ax.plot(*lines, color="blue")
+            idx = agents.index(msg.edge_i)
+            cube = msg.rel_offset_trans(t, pos[k,idx*2:(idx*2)+2])
+            lines = poly_lines(get_vertices(cube))
+            plotted_lines.extend(ax.plot(*lines, color="blue"))
 
-        return plotted_lines
+        indices = [[0, 1], [1, 2], [2, 3], [2, 4], [4, 5], [5, 6], [6, 7]]
+        idx_choice = [x_indices, y_indices]
+        pos_list = [[pos[k][idx_choice[i]][idx[0]], pos[k][idx_choice[i]][idx[1]]] for idx in indices for i in range(2)]
+        plotted_lines.extend(ax.plot(*pos_list, color="orange"))
 
-    ani = animation.FuncAnimation(
-        fig, update, frames=timesteps, init_func=init, blit=True, interval=200
-    )
+        scatter.set_offsets(np.column_stack((pos[k][x_indices], pos[k][y_indices])))
+        return plotted_lines + [scatter]
 
-    ani.save("barrier_service.mp4")
+    anim = animation.FuncAnimation(fig, update, frames=len(timesteps), init_func=init, blit=True)
+    #anim.save("barrier_service_rel.mp4")
     plt.show()
-    return ani
-
-    
+    return anim
 
 
 
@@ -228,8 +235,32 @@ def main(args=None):
     time.sleep(1)
 
     #hypercubes = node.msgs[0].c
-    print(node.msgs[-1].get_offset(0.1))
-    animate_msgs(node, node.abs_from_rel(node.edge_pos, None))
+    #animate_msgs(node, node.abs_from_rel(node.edge_pos, None))
+    agents = node.used_agent()
+    
+    timespan = np.linspace(0, END, STEPS)
+
+    pos = optimize_path(STEPS, node.msgs, agents, dt=DT)
+    print(pos[0].shape)
+
+    x_indices = [i*2 for i in range(len(agents))]
+    y_indices = [i*2+1 for i in range(len(agents))]
+
+    print(x_indices)
+    
+    #plt.scatter(pos[1][x_indices], pos[2][y_indices])
+    #plt.scatter(pos[2][x_indices], pos[2][y_indices])
+    
+
+    animate_msgs(node, pos, timespan)
+
+    # for k, t in enumerate(timespan):
+    #     plt.scatter(pos[k][x_indices], pos[k][y_indices])
+    #     for msg in node.msgs:
+    #         cube = msg.get_offset(t)
+    #         lines = poly_lines(get_vertices(cube))
+    #         plt.plot(*lines)
+    #     plt.show()
 
 
     # plt.scatter(node.abs_pos[:,0], node.abs_pos[:,1])
@@ -249,15 +280,6 @@ def main(args=None):
     # plt.show()
 
     sys.exit(0)
-    # try:
-    #     executor.spin()
-    # except KeyboardInterrupt:
-    #     print("Ctrl-C, shutting down...")
-    # finally:
-    #     executor.remove_node(node)
-    #     node.destroy_node()
-    #     if rclpy.ok():
-    #         rclpy.shutdown()
 
 if __name__ == "__main__":
     main()

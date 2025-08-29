@@ -88,9 +88,20 @@ class HyperCubeHandler(bMsg):
         self.neighbour = neighbour
 
     def get_offset(self, t):
-        print(self.edge_i, self.edge_j, not self.neighbour)
         if self.neighbour is not None:
             offset = self.neighbour.get_offset(t)
             return self.compute_offset_vector(t) + offset
         else:
-            return self.compute_offset_vector(t) 
+            return self.compute_offset_vector(t)
+        
+    def get_offset_trans(self, t, pos):
+        if self.neighbour is not None:
+            offset = self.neighbour.get_offset_trans(t, pos)
+            return self.compute_offset_vector(t) + offset
+        else:
+            trans = np.array([pos[0], -pos[0], pos[1], -pos[1]])
+            return self.compute_offset_vector(t) + trans
+
+    def rel_offset_trans(self, t, pos):
+        trans = np.array([pos[0], -pos[0], pos[1], -pos[1]])
+        return self.compute_offset_vector(t) + trans
