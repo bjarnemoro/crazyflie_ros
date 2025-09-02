@@ -95,9 +95,9 @@ class TaskManager():
             for timespan in self.time_lookup[tuple(edge)]:
                 tmsg = TMsg()
                 tmsg.center.extend([float(e) for e in pos])
-                tmsg.size.extend([10. for _ in range(Config.DIM * 2)])
-                tmsg.start = float(timespan[0] - t+5)
-                tmsg.end = float(timespan[1] - t+5)
+                tmsg.size.extend([2. for _ in range(Config.DIM * 2)])
+                tmsg.start = float(4)
+                tmsg.end = float(6)
                 tmsg.edge_i = int(edge[0])
                 tmsg.edge_j = int(edge[1])
                 tmsg.type = "always"

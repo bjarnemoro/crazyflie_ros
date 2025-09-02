@@ -39,7 +39,7 @@ def generate_launch_description():
 
     agent_node = Node(
             package='solve_setpoint',
-            executable='agent',
+            executable='agentMPC',
             output='screen',
             parameters=[
                 {'robot_prefix': 'crazyflie'},

@@ -22,7 +22,8 @@ setup(
     entry_points={
         'console_scripts': [
             'agent = solve_setpoint.agent:main',
-            'manager = solve_setpoint.managers:main'
+            'manager = solve_setpoint.managers:main',
+            'agentMPC = solve_setpoint.agent_MPC:main'
         ],
     },
 )

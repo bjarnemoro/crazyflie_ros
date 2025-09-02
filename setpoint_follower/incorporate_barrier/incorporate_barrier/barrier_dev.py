@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib import colors as mcolors
-from mpl_toolkits.mplot3d import Axes3D
+#from mpl_toolkits.mplot3d import Axes3D
 
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
@@ -15,7 +15,7 @@ from barrier_msg.srv import BCompSrv
 from barrier_msg.msg import BMsg, TMsg
 
 from incorporate_barrier.bMsg import bMsg, HyperCubeHandler
-from incorporate_barrier.MPC_barrier import optimize_path
+from incorporate_barrier.MPC_barrier import optimize_path, optimize_path_first
 from solve_setpoint.solvers.combined_solve import solve_combined
 
 
@@ -43,11 +43,11 @@ class BarrierDev(Node):
         
 
         self.task_paths = [[[3, 0], [0, 1], [1, 2]], [[0, 1], [1, 4]], [[4, 5], [5, 6], [6, 7]], [[4, 5]]]
-        #task_pos = [[20, 10], [10, -10], [15, 0], [10, -10]]
-        #task_box = [[20, 20, 20, 20], [10, 10, 10, 10], [10, 10, 10, 10], [10, 10, 10, 10]]
+        task_pos = [[20, 10], [10, -10], [15, 0], [10, -10]]
+        task_box = [[20, 20, 20, 20], [10, 10, 10, 10], [10, 10, 10, 10], [10, 10, 10, 10]]
 
-        task_pos = [[20, 10, -5], [10, -10, -8], [15, 0, -10], [10, -10, -3]]
-        task_box = [[20, 20, 20, 20, 20, 20], [10, 10, 10, 10, 10, 10], [10, 10, 10, 10, 10, 10], [10, 10, 10, 10, 10, 10]]
+        #task_pos = [[20, 10, -5], [10, -10, -8], [15, 0, -10], [10, -10, -3]]
+        #task_box = [[20, 20, 20, 20, 20, 20], [10, 10, 10, 10, 10, 10], [10, 10, 10, 10, 10, 10], [10, 10, 10, 10, 10, 10]]
         return_mode = "relative"
 
         succes, self.edge_pos, edge_box = solve_combined(self.task_paths, task_pos, task_box, return_mode)
@@ -234,69 +234,69 @@ def animate_msgs(node, pos, timesteps):
     return anim
 
 #chatGPT animation
-def animate_msgs_3d(node, pos, timesteps):
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
+# def animate_msgs_3d(node, pos, timesteps):
+#     fig = plt.figure()
+#     ax = fig.add_subplot(111, projection='3d')
 
-    # now each agent has 3 dims: x,y,z
-    n_agents = len(pos[0]) // 3
-    x_indices = [i * 3 for i in range(n_agents)]
-    y_indices = [i * 3 + 1 for i in range(n_agents)]
-    z_indices = [i * 3 + 2 for i in range(n_agents)]
+#     # now each agent has 3 dims: x,y,z
+#     n_agents = len(pos[0]) // 3
+#     x_indices = [i * 3 for i in range(n_agents)]
+#     y_indices = [i * 3 + 1 for i in range(n_agents)]
+#     z_indices = [i * 3 + 2 for i in range(n_agents)]
 
-    agents = node.used_agent()
+#     agents = node.used_agent()
 
-    ax.set_xlim(-20, 30)
-    ax.set_ylim(-20, 20)
-    ax.set_zlim(-10, 20)
+#     ax.set_xlim(-20, 30)
+#     ax.set_ylim(-20, 20)
+#     ax.set_zlim(-10, 20)
 
-    scatter = ax.scatter([], [], [])
-    plotted_lines = []
+#     scatter = ax.scatter([], [], [])
+#     plotted_lines = []
 
-    def init():
-        return []
+#     def init():
+#         return []
 
-    def update(k):
-        t = timesteps[k]
+#     def update(k):
+#         t = timesteps[k]
 
-        # Remove previously drawn lines
-        while plotted_lines:
-            plotted_lines.pop().remove()
+#         # Remove previously drawn lines
+#         while plotted_lines:
+#             plotted_lines.pop().remove()
 
-        # Draw all messages at timestep t
-        for (edge, _), msg in zip(node.edge_pos, node.msgs):
-            idx = agents.index(msg.edge_i)
-            # pass 3D position [x,y,z] for this agent
-            cube = msg.rel_offset_trans(t, pos[k, idx*3:(idx*3)+3])
-            verts = get_vertices_3d(cube)  # should now return 3D vertices
-            #lines = poly_lines_3d(verts)   # should give line segments in 3D
-            #for line in lines:
-            #    plotted_lines.extend(ax.plot(line[0], line[1], line[2], color="blue"))
-            plotted_lines.extend(ax.plot(verts[:,0], verts[:,1], verts[:,2], color="blue",linestyle="--"))
+#         # Draw all messages at timestep t
+#         for (edge, _), msg in zip(node.edge_pos, node.msgs):
+#             idx = agents.index(msg.edge_i)
+#             # pass 3D position [x,y,z] for this agent
+#             cube = msg.rel_offset_trans(t, pos[k, idx*3:(idx*3)+3])
+#             verts = get_vertices_3d(cube)  # should now return 3D vertices
+#             #lines = poly_lines_3d(verts)   # should give line segments in 3D
+#             #for line in lines:
+#             #    plotted_lines.extend(ax.plot(line[0], line[1], line[2], color="blue"))
+#             plotted_lines.extend(ax.plot(verts[:,0], verts[:,1], verts[:,2], color="blue",linestyle="--"))
 
-        # Example: plot connecting structure for all agents (like your indices before)
-        # Here just connect x,y,z coords arbitrarily — adapt as needed
-        indices = [[0, 1], [1, 2], [2, 3], [2, 4], [4, 5], [5, 6], [6, 7]]
-        for (idx1, idx2) in indices:
-            xline = [pos[k][x_indices[idx1]], pos[k][x_indices[idx2]]]
-            yline = [pos[k][y_indices[idx1]], pos[k][y_indices[idx2]]]
-            zline = [pos[k][z_indices[idx1]], pos[k][z_indices[idx2]]]
-            plotted_lines.extend(ax.plot(xline, yline, zline, color="orange"))
+#         # Example: plot connecting structure for all agents (like your indices before)
+#         # Here just connect x,y,z coords arbitrarily — adapt as needed
+#         indices = [[0, 1], [1, 2], [2, 3], [2, 4], [4, 5], [5, 6], [6, 7]]
+#         for (idx1, idx2) in indices:
+#             xline = [pos[k][x_indices[idx1]], pos[k][x_indices[idx2]]]
+#             yline = [pos[k][y_indices[idx1]], pos[k][y_indices[idx2]]]
+#             zline = [pos[k][z_indices[idx1]], pos[k][z_indices[idx2]]]
+#             plotted_lines.extend(ax.plot(xline, yline, zline, color="orange"))
 
-        scatter._offsets3d = (
-            pos[k][x_indices],
-            pos[k][y_indices],
-            pos[k][z_indices],
-        )
+#         scatter._offsets3d = (
+#             pos[k][x_indices],
+#             pos[k][y_indices],
+#             pos[k][z_indices],
+#         )
 
-        return plotted_lines + [scatter]
+#         return plotted_lines + [scatter]
 
-    anim = animation.FuncAnimation(
-        fig, update, frames=len(timesteps), init_func=init, blit=False
-    )
-    #anim.save("barrier_service_3d.gif")
-    plt.show()
-    return anim
+#     anim = animation.FuncAnimation(
+#         fig, update, frames=len(timesteps), init_func=init, blit=False
+#     )
+#     #anim.save("barrier_service_3d.gif")
+#     plt.show()
+#     return anim
 
 
 
@@ -322,22 +322,31 @@ def main(args=None):
     
     timespan = np.linspace(0, END, STEPS)
 
-    return_val = "x0"
-    x0 = np.zeros((len(agents)*6))
-    x0 = optimize_path(10, x0, 0, node.msgs, agents, dt=DT, return_val=return_val)
+    # return_val = "x0"
+    # x0 = np.zeros((len(agents)*4))
+    # x0 = optimize_path(10, x0, 0, node.msgs, agents, dt=DT, return_val=return_val)
 
-    pos = np.zeros((100, len(agents)*3))
+    # pos = np.zeros((100, len(agents)*2))
+    # for k in range(100):
+    #     t = timespan[k]
+    #     x0 = optimize_path(30, x0, t, node.msgs, agents, dt=DT, return_val=return_val)
+    #     pos[k] = x0[:len(agents)*2]
+
+    return_val = "x0"
+    x0 = np.zeros((len(agents)*2))
+
+    pos = np.zeros((100, len(agents)*2))
     for k in range(100):
         t = timespan[k]
-        x0 = optimize_path(30, x0, t, node.msgs, agents, dt=DT, return_val=return_val)
-        pos[k] = x0[:len(agents)*3]
+        x0 = optimize_path_first(30, x0, t, node.msgs, agents, dt=DT, return_val=return_val)
+        pos[k] = x0
     #print(pos[0].shape)
     
     #plt.scatter(pos[1][x_indices], pos[2][y_indices])
     #plt.scatter(pos[2][x_indices], pos[2][y_indices])
     
-
-    animate_msgs_3d(node, pos, timespan)
+    animate_msgs(node, pos, timespan)
+    #animate_msgs_3d(node, pos, timespan)
 
     # for k, t in enumerate(timespan):
     #     plt.scatter(pos[k][x_indices], pos[k][y_indices])

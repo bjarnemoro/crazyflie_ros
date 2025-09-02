@@ -100,14 +100,14 @@ class HyperCubeHandler(bMsg):
             return self.compute_offset_vector(t) + offset
         else:
             if len(pos) == 2:
-                trans = np.array([pos[0], -pos[0], pos[1], -pos[1], pos[2], -pos[2]])
+                trans = np.array([pos[0], -pos[0], pos[1], -pos[1]])
             elif len(pos) == 3:
                 trans = np.array([pos[0], -pos[0], pos[1], -pos[1], pos[2], -pos[2]])
             return self.compute_offset_vector(t) + trans
 
     def rel_offset_trans(self, t, pos):
         if len(pos) == 2:
-            trans = np.array([pos[0], -pos[0], pos[1], -pos[1], pos[2], -pos[2]])
+            trans = np.array([pos[0], -pos[0], pos[1], -pos[1]])
         elif len(pos) == 3:
             trans = np.array([pos[0], -pos[0], pos[1], -pos[1], pos[2], -pos[2]])
         return self.compute_offset_vector(t) + trans

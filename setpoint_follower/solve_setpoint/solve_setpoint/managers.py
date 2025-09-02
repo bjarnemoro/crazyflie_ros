@@ -9,9 +9,8 @@ from std_msgs.msg import Int32MultiArray
 from rclpy.executors import MultiThreadedExecutor
 from msg_interface.msg import TaskEdge, TaskEdgeList
 from barrier_msg.srv import BCompSrv
-from barrier_msg.msg import BMsg, TMsg
+from barrier_msg.msg import BMsg, TMsg, BMsglist
 from barrier_msg.msg import Config
-from incorporate_barrier.MPC_barrier import optimize_path
 #from solve_setpoint.config import Config
 
 from solve_setpoint.bMsg import bMsg, HyperCubeHandler
@@ -45,16 +44,17 @@ class Manager(Node):
                 Task([10,13], [1,8], [-2, 1]),
                 Task([10,13], [7,2], [0.2, 1.6])]
             self.tasks = [
-                Task([4,9], [5,8], [0,-1]),
-                Task([4,9], [8,6], [0,-1]),
-                Task([4,9], [6,9], [0,-1]),
-                Task([4,9], [9,7], [0,-1]),
-                #Task([4,9], [6,3], [1,1]),
-                #Task([4,9], [6,1], [1,-1]),
-                #Task([4,9], [6, 0], [-1, 1]),
-                #Task([4,9], [6, 1], [1, 1]),
-                Task([10,13], [1,8], [-2, 1]),
-                Task([10,13], [7,2], [0.2, 1.6])]
+                Task([4,15], [5,8], [0,-1]),
+                Task([4,15], [8,6], [0,-1]),
+                Task([4,15], [6,9], [0,-1]),
+                Task([4,15], [9,7], [0,-1]),
+                Task([4,15], [6,3], [0.5,0]),
+                Task([4,15], [3,0], [0.6,0.6]),
+                Task([4,15], [0,2], [0.6,0.6]),
+                Task([4,15], [3,1], [0.6,-0.6]),
+                Task([4,15], [1,4], [0.6,-0.6])]
+                #Task([10,13], [1,8], [-2, 1]),
+                #Task([10,13], [7,2], [0.2, 1.6])]
         elif Config.DIM == 3:
             self.tasks = [
                 Task([4,9], [0,9], [-2,-1, 1]),
@@ -81,6 +81,9 @@ class Manager(Node):
         self.barrier_client = self.create_client(BCompSrv, '/compute_barriers')
         while not self.barrier_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('service not available, waiting again...')
+
+        self.barrier_publisher = self.create_publisher(BMsglist, "/barriers", 10)
+
         
         for i, drone in enumerate(self.drones):
             callback = lambda msg, idx=i: self.graph_manager.set_pos_callback(msg, idx)
@@ -114,32 +117,13 @@ class Manager(Node):
             self.msgs = []
             response = future.result()
 
-            for bmsg in response.messages:
-                my_msg = HyperCubeHandler(
-                    bmsg.slopes, 
-                    bmsg.gamma0, 
-                    bmsg.r, 
-                    bmsg.slack, 
-                    bmsg.b_vector, 
-                    bmsg.time_grid, 
-                    bmsg.task_id, 
-                    bmsg.edge_i, 
-                    bmsg.edge_j)
-                
-                self.msgs.append(my_msg)
-
-            for bmsg in self.msgs:
-                candidates = [bmsg2 for bmsg2 in self.msgs if bmsg2.edge_j == bmsg.edge_i]
-                if candidates:
-                    bmsg.add_neighbour(candidates[0])
+            msg = BMsglist()
+            msg.messages.extend(response.messages)
+            self.barrier_publisher.publish(msg)
 
         except Exception as e:
             self.get_logger().info(f"Service call failed: {e}", )
 
-        HORIZON = 100
-        DT = 0.1
-
-        self.x = optimize_path(HORIZON, self.msgs, [i for i in range(10)], DT)
 
     def mainloop(self):
         if self.state == State.START_DRONE:
@@ -207,7 +191,7 @@ class Manager(Node):
             #-------------------------------
             #    Main optimization logic
             #-------------------------------
-            if time_recalc or edge_recalc:
+            if time_recalc:# or edge_recalc:
                 if time_recalc:
                     self.get_logger().info("recaculating at: {}".format(self.total_elapsed))
 
