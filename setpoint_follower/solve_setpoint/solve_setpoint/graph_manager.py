@@ -2,15 +2,18 @@ import numpy as np
 from copy import deepcopy
 from collections import defaultdict
 
-from barrier_msg.msg import Config
+#from barrier_msg.msg import Config
 
 class GraphManager:
     #check if all agents are receiving there position
     
 
-    def __init__(self):
-        self.__agent_pos = np.zeros((Config.NUM_AGENTS, 3))
-        self.__set_pos = np.zeros((Config.NUM_AGENTS, 3))
+    def __init__(self, num_agents, comm_distance):
+        self.NUM_AGENTS = num_agents
+        self.COMM_DISTANCE = comm_distance
+
+        self.__agent_pos = np.zeros((self.NUM_AGENTS, 3))
+        self.__set_pos = np.zeros((self.NUM_AGENTS, 3))
         self.__comm_edges = None
         self.__comm_graph = None
         self.__task_edges = None
@@ -59,7 +62,7 @@ class GraphManager:
         edges = []
         for i in range(len(self.__agent_pos)):
             for j in range(i+1, len(self.__agent_pos)):
-                if np.abs(np.linalg.norm(self.__agent_pos[i]-self.__agent_pos[j])) < Config.COMM_DISTANCE:
+                if np.abs(np.linalg.norm(self.__agent_pos[i]-self.__agent_pos[j])) < self.COMM_DISTANCE:
                     edges.append((i,j))
 
         if edges != self.__comm_edges:

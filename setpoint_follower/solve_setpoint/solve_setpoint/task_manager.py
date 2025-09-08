@@ -6,7 +6,6 @@ import numpy as np
 from collections import  defaultdict
 from dataclasses import dataclass
 from barrier_msg.msg import BMsg, TMsg
-from barrier_msg.msg import Config
 
 from solve_setpoint.solvers.shortest_path import dijkstra
 
@@ -21,10 +20,12 @@ class Task:
 
 
 class TaskManager():
-    def __init__(self, tasks=None, task_path=None):
+    def __init__(self, dim, tasks=None, task_path=None):
         """load the the tasks either via a json file or an array of tasks with the following structure:
         [([],[],[]), ..., ([],[],[])] with each tuple having time period, agent idx, relative pos
         i.e [0,3], [0, 4], [10, 20] so from time 0 to 3 sec agent 0 has a postion of [10, 20] compared to agent 4"""
+        self.DIM = dim
+
         if task_path is not None:
             self.load_task_path(task_path)
         elif tasks is not None:
@@ -95,7 +96,7 @@ class TaskManager():
             for timespan in self.time_lookup[tuple(edge)]:
                 tmsg = TMsg()
                 tmsg.center.extend([float(e) for e in pos])
-                tmsg.size.extend([2. for _ in range(Config.DIM * 2)])
+                tmsg.size.extend([2. for _ in range(self.DIM * 2)])
                 tmsg.start = float(4)
                 tmsg.end = float(6)
                 tmsg.edge_i = int(edge[0])

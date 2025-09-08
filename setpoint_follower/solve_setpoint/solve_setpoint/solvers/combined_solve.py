@@ -2,8 +2,6 @@ import cvxpy as cp
 import numpy as np
 import matplotlib.pyplot as plt
 
-from barrier_msg.msg import Config
-
 def flatten(i):
     return [k for j in i for k in j]
 
@@ -76,7 +74,7 @@ def vertices(bbox, box_dim):
     return bbox_vertices
 
 
-def solve_combined(task_paths: np.ndarray, task_pos: np.ndarray, task_box: np.ndarray, return_mode: str) -> bool:
+def solve_combined(task_paths: np.ndarray, task_pos: np.ndarray, task_box: np.ndarray, return_mode: str, BOX_WEIGHT, COMM_DISTANCE) -> bool:
     """
     
     """
@@ -137,7 +135,7 @@ def solve_combined(task_paths: np.ndarray, task_pos: np.ndarray, task_box: np.nd
     #box_objective = -cp.sum(bbox) -MIN_WEIGHT1*cp.sum(cp.min(bbox, axis=0)) -MIN_WEIGHT2*cp.sum(cp.min(bbox)) #cp.sum(task_box - tasks_selector @ bbox)
     box_objective = -cp.sum(bbox) + cp.dotsort(cp.min(bbox, axis=0), np.array([-(i+1)**2 for i in range(box_dim)]))
 
-    objective = cp.Minimize(task_objective+Config.BOX_WEIGHT*box_objective)
+    objective = cp.Minimize(task_objective+BOX_WEIGHT*box_objective)
 
     #define the constraints 
     task_constraint = [
@@ -145,7 +143,7 @@ def solve_combined(task_paths: np.ndarray, task_pos: np.ndarray, task_box: np.nd
     
     box_constraint = [
         tasks_selector @ bbox <= task_box,
-        cp.norm(bbox_vertices+task_stacked, axis=1)<=Config.COMM_DISTANCE,
+        cp.norm(bbox_vertices+task_stacked, axis=1)<=COMM_DISTANCE,
         bbox >= 0]
                                    
     

@@ -9,10 +9,13 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
 from rclpy.executors import MultiThreadedExecutor
 
-from barrier_msg.msg import Config
-
 class Agent(Node):
     def __init__(self, drone):
+        self.AGENT_TIMER = 0.1
+        self.SPEED = 0.5
+
+        raise NotImplementedError("add the params to yaml if you want to use this")
+
         super().__init__(drone[1:])
         self.declare_parameter('robot_prefix', '/crazyflie')
         self.robot_prefix = drone
@@ -28,7 +31,7 @@ class Agent(Node):
         self.setpoint_angles = [0., 0., 0.]
 
         self.set_recv = False
-        self.timer = self.create_timer(Config.AGENT_TIMER, self.timer_callback)
+        self.timer = self.create_timer(self.AGENT_TIMER, self.timer_callback)
 
     def timer_callback(self):
         time = self.get_clock().now().nanoseconds
@@ -36,9 +39,9 @@ class Agent(Node):
 
         if self.set_recv:
             msg = Twist()
-            msg.linear.x = np.clip(self.setpoint_pos[0] - self.pos[0], -Config.SPEED, Config.SPEED)
-            msg.linear.y = np.clip(self.setpoint_pos[1] - self.pos[1], -Config.SPEED, Config.SPEED)
-            msg.linear.z = np.clip(self.setpoint_pos[2] - self.pos[2], -Config.SPEED, Config.SPEED)
+            msg.linear.x = np.clip(self.setpoint_pos[0] - self.pos[0], -self.SPEED, self.SPEED)
+            msg.linear.y = np.clip(self.setpoint_pos[1] - self.pos[1], -self.SPEED, self.SPEED)
+            msg.linear.z = np.clip(self.setpoint_pos[2] - self.pos[2], -self.SPEED, self.SPEED)
             self.twist_publisher.publish(msg)
 
     def odom_callback(self, msg):

@@ -10,8 +10,6 @@ from rclpy.executors import MultiThreadedExecutor
 from msg_interface.msg import TaskEdge, TaskEdgeList
 from barrier_msg.srv import BCompSrv
 from barrier_msg.msg import BMsg, TMsg, BMsglist
-from barrier_msg.msg import Config
-#from solve_setpoint.config import Config
 
 from solve_setpoint.bMsg import bMsg, HyperCubeHandler
 from solve_setpoint.graph_manager import GraphManager
@@ -34,10 +32,24 @@ class Manager(Node):
         self.declare_parameter('robot_prefix', '/manager')
         self.robot_prefix = self.get_parameter('robot_prefix').value
 
-        self.get_logger().info(f"{Config.DIM}")
+        self.declare_parameter("DIM", 2)
+        self.declare_parameter("NUM_AGENTS", 10)
+        self.declare_parameter("MAIN_TIMER", 0.1)
+        self.declare_parameter("SETPOINT_TIMER", 0.1)
+        self.declare_parameter("COMM_DISTANCE", 1.1)
+        self.declare_parameter("BOX_WEIGHT", 10)
+
+        self.DIM = self.get_parameter("DIM").value
+        self.NUM_AGENTS = self.get_parameter("NUM_AGENTS").value
+        self.MAIN_TIMER = self.get_parameter("MAIN_TIMER").value
+        self.SETPOINT_TIMER = self.get_parameter("SETPOINT_TIMER").value
+        self.COMM_DISTANCE = self.get_parameter("COMM_DISTANCE").value
+        self.BOX_WEIGHT = self.get_parameter("BOX_WEIGHT").value
+
+        self.get_logger().info(f"{self.DIM}")
 
         #setup the tasks that are to be done
-        if Config.DIM == 2:
+        if self.DIM  == 2:
             self.tasks = [
                 Task([4,9], [0,9], [-2,-1]),
                 Task([4,9], [4, 5], [0, 1.6]),
@@ -55,7 +67,7 @@ class Manager(Node):
                 Task([4,15], [1,4], [0.6,-0.6])]
                 #Task([10,13], [1,8], [-2, 1]),
                 #Task([10,13], [7,2], [0.2, 1.6])]
-        elif Config.DIM == 3:
+        elif self.DIM  == 3:
             self.tasks = [
                 Task([4,9], [0,9], [-2,-1, 1]),
                 Task([4,9], [4,5], [0, 1.6, 0.5]),
@@ -63,15 +75,15 @@ class Manager(Node):
                 Task([10,13], [7,2], [0.2, 1.6, -1])]
 
         #setup the graph manager and task manager
-        self.graph_manager = GraphManager()
-        self.task_manager = TaskManager(self.tasks)
+        self.graph_manager = GraphManager(self.NUM_AGENTS, self.COMM_DISTANCE)
+        self.task_manager = TaskManager(self.DIM, self.tasks)
 
         self.recalc_times = self.task_manager.recalculate_at()
         self.triggered_times = set()
-        self.setpoints = np.zeros((Config.NUM_AGENTS, 3))
+        self.setpoints = np.zeros((self.NUM_AGENTS, 3))
 
         #setup all the subscribers and publishers
-        self.drones = ['/crazyflie{}'.format(i) for i in range(1,Config.NUM_AGENTS+1)]
+        self.drones = ['/crazyflie{}'.format(i) for i in range(1,self.NUM_AGENTS+1)]
         self.odom_subscribers = []
         self.setpoint_publishers = []
 
@@ -92,8 +104,8 @@ class Manager(Node):
             self.setpoint_publishers.append(self.create_publisher(Odometry, drone + '/set', 10)) 
 
         #start the main loops of the system with a timer method
-        self.timer = self.create_timer(Config.MAIN_TIMER, self.mainloop)
-        self.setpoint_timer = self.create_timer(Config.SETPOINT_TIMER, self.setpoint_update)
+        self.timer = self.create_timer(self.MAIN_TIMER, self.mainloop)
+        self.setpoint_timer = self.create_timer(self.SETPOINT_TIMER, self.setpoint_update)
         self.once = True
 
         self.x = None
@@ -179,7 +191,7 @@ class Manager(Node):
                     task_edge.end_idx = task[0][1]
                     task_edge.agent_x = float(task[1][0])
                     task_edge.agent_y = float(task[1][1])
-                    if Config.DIM==2:
+                    if self.DIM==2:
                         task_edge.agent_z = 0.
                     else:
                         task_edge.agent_z = float(task[1][2])
@@ -206,13 +218,14 @@ class Manager(Node):
                     agents = self.graph_manager.get_pos()
                     return_mode = "relative"
 
-                    if Config.DIM == 2:
+                    if self.DIM == 2:
                         agents = agents[:,:2]
 
                     #pos_result = solve_task(agents, task_paths, task_pos, return_mode)
                     #rad_result = solve_radius(agents, task_paths, task_rad, return_mode)
 
-                    succes, pos_result, box_result = solve_combined(task_paths, task_pos, task_box, return_mode)
+                    succes, pos_result, box_result = solve_combined(
+                        task_paths, task_pos, task_box, return_mode, self.BOX_WEIGHT, self.COMM_DISTANCE)
 
                     if succes:
                         self.graph_manager.compute_setpoint(pos_result)
@@ -241,9 +254,9 @@ class Manager(Node):
                 msg = Odometry()
                 msg.pose.pose.position.x = setpoint[0]
                 msg.pose.pose.position.y = setpoint[1]
-                if Config.DIM == 2:
+                if self.DIM == 2:
                     msg.pose.pose.position.z = 1.#1+np.cos(time_sec)*0.5#setpoint[2]
-                elif Config.DIM == 3:
+                elif self.DIM == 3:
                     msg.pose.pose.position.z = setpoint[2]
 
                 pub.publish(msg)
@@ -261,9 +274,9 @@ class Manager(Node):
                         msg = Odometry()
                         msg.pose.pose.position.x = self.x[idx, i*2]
                         msg.pose.pose.position.y = self.x[idx, i*2+1]
-                        if Config.DIM == 2:
+                        if self.DIM == 2:
                             msg.pose.pose.position.z = 1.#1+np.cos(time_sec)*0.5#setpoint[2]
-                        elif Config.DIM == 3:
+                        elif self.DIM == 3:
                             msg.pose.pose.position.z = self.x[idx, i*2+2]
 
                         pub.publish(msg)

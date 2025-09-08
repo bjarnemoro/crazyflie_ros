@@ -9,7 +9,7 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist
 from rclpy.executors import MultiThreadedExecutor
 
-from barrier_msg.msg import Config
+#from barrier_msg.msg import Config
 from barrier_msg.msg import BMsg, BMsglist
 from solve_setpoint.bMsg import bMsg, HyperCubeHandler
 from incorporate_barrier.MPC_barrier import optimize_path_first
@@ -19,6 +19,19 @@ from incorporate_barrier.MPC_barrier import optimize_path_first
 class MPC_agents(Node):
     def __init__(self):
         super().__init__("drones")
+
+        self.declare_parameter("DIM", 10)
+        self.declare_parameter("NUM_AGENTS", 10)
+        self.declare_parameter("SPEED", 0.4)
+        self.declare_parameter("AGENT_TIMER", 0.1)
+
+        self.DIM = self.get_parameter("DIM").value
+        self.SPEED = self.get_parameter("SPEED").value
+        self.NUM_AGENTS = self.get_parameter("NUM_AGENTS").value
+        self.AGENT_TIMER = self.get_parameter("AGENT_TIMER").value
+
+
+
         self.declare_parameter('robot_prefix', '/crazyflie')
         self.robot_prefix = "crazyflie1"
 
@@ -29,7 +42,7 @@ class MPC_agents(Node):
         #self.create_subscription(Odometry, self.robot_prefix + '/set', self.setpoint_callback, 10)
 
 
-        self.drones = ['/crazyflie{}'.format(i) for i in range(1,Config.NUM_AGENTS+1)]
+        self.drones = ['/crazyflie{}'.format(i) for i in range(1,self.NUM_AGENTS+1)]
         self.odom_subscribers = []
         self.twist_publishers = []
         for i, drone in enumerate(self.drones):
@@ -44,7 +57,7 @@ class MPC_agents(Node):
         self.angles = np.zeros((10, 3))
 
         self.set_recv = False
-        self.timer = self.create_timer(Config.AGENT_TIMER, self.timer_callback)
+        self.timer = self.create_timer(self.AGENT_TIMER, self.timer_callback)
         self.MPCtimer = self.create_timer(0.02, self.MPC_callback)
 
         self.mode = "startup"
@@ -59,9 +72,9 @@ class MPC_agents(Node):
 
         if self.set_recv:
             msg = Twist()
-            msg.linear.x = np.clip(self.setpoint_pos[0] - self.pos[0], -Config.SPEED, Config.SPEED)
-            msg.linear.y = np.clip(self.setpoint_pos[1] - self.pos[1], -Config.SPEED, Config.SPEED)
-            msg.linear.z = np.clip(self.setpoint_pos[2] - self.pos[2], -Config.SPEED, Config.SPEED)
+            msg.linear.x = np.clip(self.setpoint_pos[0] - self.pos[0], -self.SPEED, self.SPEED)
+            msg.linear.y = np.clip(self.setpoint_pos[1] - self.pos[1], -self.SPEED, self.SPEED)
+            msg.linear.z = np.clip(self.setpoint_pos[2] - self.pos[2], -self.SPEED, self.SPEED)
             self.twist_publisher.publish(msg)
 
     def odom_callback(self, msg, idx=0):
@@ -119,12 +132,14 @@ class MPC_agents(Node):
         if self.mode == "startup":
             for idx, publisher in enumerate(self.twist_publishers):
                 msg = Twist()
-                msg.linear.z = np.clip(1. - self.pos[idx, 2], -Config.SPEED, Config.SPEED)
+                msg.linear.z = np.clip(1. - self.pos[idx, 2], -self.SPEED, self.SPEED)
                 publisher.publish(msg)
 
         elif self.mode == "MPC":
-            if Config.DIM == 2:
+            if self.DIM == 2:
                 x0 = self.pos[:,:2].flatten()
+            elif self.DIM == 3:
+                x0 = self.pos.flatten()
             agents = [i for i in range(10)]
             return_val = "input"
             u = optimize_path_first(40, x0, time_sec, self.barriers, agents, dt=dt_sec, return_val=return_val)
@@ -132,9 +147,9 @@ class MPC_agents(Node):
             self.get_logger().info(f"{time_sec}")
             for idx, publisher in enumerate(self.twist_publishers):
                 msg = Twist()
-                msg.linear.x = u[Config.DIM*idx+0]
-                msg.linear.y = u[Config.DIM*idx+1]
-                msg.linear.z = np.clip(1. - self.pos[idx, 2], -Config.SPEED, Config.SPEED)
+                msg.linear.x = u[self.DIM*idx+0]
+                msg.linear.y = u[self.DIM*idx+1]
+                msg.linear.z = np.clip(1. - self.pos[idx, 2], -self.SPEED, self.SPEED)
                 publisher.publish(msg)
         else:
             raise ValueError("mode supposed to be startup or MPC")

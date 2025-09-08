@@ -26,6 +26,12 @@ def generate_launch_description():
             os.path.join(pkg_project_crazyflie_gazebo, 'launch', 'crazyflie_simulation_10.launch.py'))
     )
 
+    config = os.path.join(
+        get_package_share_directory('crazyflie_ros2_setpoint_follower'),
+        'config',
+        'config.yaml'
+        )
+
     manager_node = Node(
         package='solve_setpoint',
         executable='manager',
@@ -33,7 +39,8 @@ def generate_launch_description():
         output='screen',
         parameters=[
             {'robot_prefix': '/manager_node'},
-            {'use_sim_time': True}
+            {'use_sim_time': True},
+            config
         ]
     )
 
@@ -43,7 +50,8 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 {'robot_prefix': 'crazyflie'},
-                {'use_sim_time': True}
+                {'use_sim_time': True},
+                config
             ]
         )
     
@@ -54,7 +62,8 @@ def generate_launch_description():
         output='screen',
         parameters=[
             {'robot_prefix': '/barrier_service'},
-            {'use_sim_time': True}
+            {'use_sim_time': True},
+            config
         ]
     )
 
