@@ -1,0 +1,185 @@
+import sys
+import rclpy
+import signal
+import numpy as np
+from rclpy.node import Node
+from nav_msgs.msg import Odometry
+from visualization_msgs.msg import Marker, MarkerArray
+from geometry_msgs.msg import Point
+
+from std_msgs.msg import Int32MultiArray
+from msg_interface.msg import TaskEdge, TaskEdgeList
+
+def line_strip(time, marker_id, pos1, pos2, color):
+    marker = Marker()
+    marker.header.frame_id = "world"
+    marker.header.stamp = time
+    marker.ns = "edges"
+    marker.id = marker_id
+    marker.type = Marker.LINE_STRIP
+    marker.action = Marker.ADD
+    marker.scale.x = 0.02  # Line width
+
+    marker.color.r = color[0]
+    marker.color.g = color[1]
+    marker.color.b = color[2]
+    marker.color.a = 1.0
+
+    # Replace with actual drone positions
+    p1 = Point(x=pos1[0], y=pos1[1], z=pos1[2])
+    p2 = Point(x=pos2[0], y=pos2[1], z=pos2[2])
+
+    marker.points.append(p1)
+    marker.points.append(p2)
+
+    return marker
+
+def sphere(time, marker_id, pos, color):
+    marker = Marker()
+    marker.header.frame_id = "world"
+    marker.header.stamp = time
+    marker.type = Marker.SPHERE
+    marker.ns = "edges"
+    marker.id = marker_id
+
+    marker.action = Marker.ADD
+
+    marker.pose.position.x = pos[0]
+    marker.pose.position.y = pos[1]
+    marker.pose.position.z = pos[2]
+    marker.pose.orientation.x = 0.0
+    marker.pose.orientation.y = 0.0
+    marker.pose.orientation.z = 0.0
+    marker.pose.orientation.w = 1.0
+
+    marker.scale.x = 0.15
+    marker.scale.y = 0.15
+    marker.scale.z = 0.15
+
+    marker.color.r = color[0]
+    marker.color.g = color[1]
+    marker.color.b = color[2]
+    marker.color.a = 1.0
+
+    return marker
+
+def delete_strip(time, marker_id):
+    marker = Marker()
+    marker.header.frame_id = "world"
+    marker.header.stamp = time
+    marker.ns = "edges"
+    marker.id = marker_id
+    marker.action = Marker.DELETE
+
+    return marker
+
+class GraphMarkerPublisher(Node):
+    def __init__(self):
+        super().__init__('graph_marker_publisher')
+        self.publisher = self.create_publisher(MarkerArray, 'visualization_marker', 10)
+        self.task_publisher = self.create_publisher(MarkerArray, 'task_visualization_marker', 10)
+        self.timer = self.create_timer(0.1, self.timer_callback)
+
+        self.drones = ['/crazyflie{}'.format(i) for i in range(1,11)]
+        self.odom_subscribers = []
+        for i, drone in enumerate(self.drones):
+            callback = lambda msg, idx=i: self.pos_callback(msg, idx)
+            self.odom_subscribers.append(self.create_subscription(
+                Odometry, drone + '/odom', callback, 10))
+
+        self.drone_pos = np.zeros((10, 3))
+        self.edges = []
+        self.task_edges = []
+        self.prev_marker_count = 0
+        self.prev_edge_count = 0
+
+        self.create_subscription(Int32MultiArray, "/graph_edges", self.set_edges, 10)
+        self.create_subscription(TaskEdgeList, "/task_edges", self.set_task, 10)
+
+    def timer_callback(self):
+        marker_array = MarkerArray()
+        marker_id = 0
+
+        #draw all the edges between the communication graph, delete the ones that are supposed to dissapear
+        for i in range(max(len(self.edges), self.prev_edge_count)):
+            if marker_id < len(self.edges):
+                time = self.get_clock().now().to_msg()
+                pos1 = self.drone_pos[self.edges[i][0]]
+                pos2 = self.drone_pos[self.edges[i][1]]
+                color = [1.0, 0.0, 0.0]
+                marker = line_strip(time, marker_id, pos1, pos2, color)
+
+                marker_array.markers.append(marker)
+                marker_id += 1
+            else:
+                time = self.get_clock().now().to_msg()
+                marker = delete_strip(time, marker_id)
+
+                marker_array.markers.append(marker)
+                marker_id += 1
+
+        self.publisher.publish(marker_array)
+
+        self.prev_edge_count = len(self.edges)
+
+        marker_array = MarkerArray()
+        marker_id = 0
+
+        for i in range(max(len(self.task_edges), self.prev_marker_count)):
+            if marker_id < len(self.task_edges)*2:
+                time = self.get_clock().now().to_msg()
+
+                edge = self.task_edges[i]
+                pos1 = self.drone_pos[edge.start_idx]
+                pos2 = self.drone_pos[edge.start_idx]+np.array([edge.agent_x, edge.agent_y, edge.agent_z])
+                color = [0.0, 1.0, 0.0]
+                marker = line_strip(time, marker_id, pos1, pos2, color)
+
+                marker_array.markers.append(marker)
+                marker_id += 1
+
+                pos = self.drone_pos[edge.end_idx]
+                marker = sphere(time, marker_id, pos, color)
+                marker_array.markers.append(marker)
+                marker_id += 1
+
+            else:
+                for _ in range(2):
+                    time = self.get_clock().now().to_msg()
+                    
+                    marker = delete_strip(time, marker_id)
+
+                    marker_array.markers.append(marker)
+                    marker_id += 1
+
+        self.task_publisher.publish(marker_array)
+        self.prev_marker_count = len(self.task_edges)
+
+    def pos_callback(self, msg, idx):
+        self.drone_pos[idx][0] = msg.pose.pose.position.x
+        self.drone_pos[idx][1] = msg.pose.pose.position.y
+        self.drone_pos[idx][2] = msg.pose.pose.position.z
+
+    def set_edges(self, msg):
+        data = msg.data
+        self.edges = [(data[i], data[i+1]) for i in range(0, len(data), 2)]
+
+    def set_task(self, msg):
+        data = msg.task_list
+        self.task_edges = data
+
+def signal_handler(sig, frame):
+    print("Shutdown signal received, cleaning up...")
+    rclpy.shutdown()
+    sys.exit(0)
+
+def main(args=None):
+    rclpy.init(args=args)
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    node = GraphMarkerPublisher()
+    rclpy.spin(node)
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,12 @@
+/**: 
+  ros__parameters:
+    DIM: 2
+    NUM_AGENTS: 10
+    MAIN_TIMER: 0.1
+    SETPOINT_TIMER: 0.1
+    AGENT_TIMER: 0.1
+    SPEED: 0.4
+
+    SIDE_LENGTH: 10.
+    ARENA_SIZE: 100.
+    MAX_INPUT: 10.
