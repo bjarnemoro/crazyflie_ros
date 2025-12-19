@@ -6,3 +6,6 @@
 	path = setpoint_follower/barrier_builder
 	url = https://github.com/gregoriomarchesini/barrier_builder.git
 	branch = service
+[submodule "ros_gz_crazyflie"]
+	path = ros_gz_crazyflie
+	url = https://github.com/knmcguire/ros_gz_crazyflie.git

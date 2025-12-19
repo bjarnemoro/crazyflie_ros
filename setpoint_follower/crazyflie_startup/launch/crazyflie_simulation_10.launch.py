@@ -81,6 +81,7 @@ def generate_launch_description():
     # Setup project paths
     pkg_project_bringup = get_package_share_directory('ros_gz_crazyflie_bringup')
     pkg_project_gazebo = get_package_share_directory('ros_gz_crazyflie_gazebo')
+    pkg_10_world = get_package_share_directory('crazyflie_ros2_setpoint_follower')
     pkg_ros_gz_sim = get_package_share_directory('ros_gz_sim')
 
     # Setup to launch the simulator and Gazebo world
@@ -88,7 +89,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(pkg_ros_gz_sim, 'launch', 'gz_sim.launch.py')),
             condition=IfCondition(LaunchConfiguration('gazebo_launch')),
-        launch_arguments={'gz_args': os.path.join(pkg_project_gazebo, 'worlds', 
+        launch_arguments={'gz_args': os.path.join(pkg_10_world, 'config', 
         'crazyflie_world_10.sdf') + ' -r'}.items(),
     )
 
