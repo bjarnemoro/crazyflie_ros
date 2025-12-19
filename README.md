@@ -1,5 +1,33 @@
 # crazyflie_ros
 ### setup
+ros dependencies
+```
+ros2: jazzy
+gazebo: Gazebo Sim, version 8.10.0
+```
+
+python environment
+```
+ament_copyright==0.17.3
+ament_flake8==0.17.3
+ament_index_python==1.8.1
+ament_pep257==0.17.3
+cdd==0.1.12
+cvxpy==1.6.6
+geometry_msgs==5.3.6
+launch_ros==0.26.10
+matplotlib==3.10.8
+nav_msgs==5.3.6
+numpy==2.3.5
+pytest==8.4.1
+pyx==0.17
+rclpy==7.1.6
+scipy==1.16.3
+setuptools==70.0.0
+std_msgs==5.3.6
+tf_transformations==1.1.0
+visualization_msgs==5.3.6
+```
 
 ### installation
 clone the repository, note that the submodules are not on the main branch
