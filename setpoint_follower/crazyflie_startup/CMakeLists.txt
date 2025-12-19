@@ -9,6 +9,7 @@ find_package(ros_gz_crazyflie_bringup REQUIRED)
 install(DIRECTORY
   launch
   config
+  models
 
   DESTINATION share/${PROJECT_NAME}/
 )

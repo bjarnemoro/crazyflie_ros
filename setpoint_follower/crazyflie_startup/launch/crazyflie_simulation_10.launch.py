@@ -28,7 +28,7 @@ from launch_ros.actions import Node
  
 
 def create_new_sdf(name):
-    pkg_project_gazebo = get_package_share_directory('ros_gz_crazyflie_gazebo')
+    pkg_project_gazebo = get_package_share_directory('crazyflie_ros2_setpoint_follower')
     SDF_PATH = os.path.join(pkg_project_gazebo, 'models/crazyflie/model.sdf')
 
     with open(SDF_PATH) as f:
