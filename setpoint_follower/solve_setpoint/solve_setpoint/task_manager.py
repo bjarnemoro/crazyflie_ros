@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import itertools
 import dataclasses
 import numpy as np
 from collections import  defaultdict
@@ -8,6 +9,8 @@ from dataclasses import dataclass
 from barrier_msg.msg import BMsg, TMsg
 
 from solve_setpoint.solvers.shortest_path import dijkstra
+from solve_setpoint.solvers.graph_search import build_graph, select_communication_inconsistent_tasks, decomposition_path_guesses
+
 
 def flatten(xss):
     return [x for xs in xss for x in xs]
@@ -18,13 +21,20 @@ class Task:
     edges: list[int, int]
     rel_position: list[int, int] | list[int, int, int]
 
+class TaskID(Task):
+    id_iter = itertools.count()
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.ID = next(self.id_iter)
+
 
 class TaskManager():
-    def __init__(self, dim, tasks=None, task_path=None):
+    def __init__(self, dim, comm_dist, tasks=None, task_path=None):
         """load the the tasks either via a json file or an array of tasks with the following structure:
         [([],[],[]), ..., ([],[],[])] with each tuple having time period, agent idx, relative pos
         i.e [0,3], [0, 4], [10, 20] so from time 0 to 3 sec agent 0 has a postion of [10, 20] compared to agent 4"""
         self.DIM = dim
+        self.COMM_DISTANCE = comm_dist
 
         if task_path is not None:
             self.load_task_path(task_path)
@@ -41,7 +51,25 @@ class TaskManager():
             if time >= task.timespan[0] and time < task.timespan[1]:
                 active_tasks.append(task)
 
+        #task_paths = self.__task_paths(active_tasks, comm_graph)
         task_paths = [self.__relative_tasks(task, comm_graph, weights) for task in active_tasks]
+        task_pos = [task.rel_position for task in active_tasks]
+        task_rad = [[10 for i in range(2*len(task.rel_position))] for task in active_tasks]
+
+        self.time_lookup = defaultdict(list)
+        for task, path in zip(active_tasks, task_paths):
+            for edge in path:
+                self.time_lookup[tuple(edge)].append(task.timespan)
+
+        return (task_paths, task_pos, task_rad)
+    
+    def obtain_current_tasks2(self, time, edges, log):
+        active_tasks = []
+        for task in self.__tasks:
+            if time >= task.timespan[0] and time < task.timespan[1]:
+                active_tasks.append(task)
+
+        task_paths = self.__task_paths(active_tasks, edges, log)
         task_pos = [task.rel_position for task in active_tasks]
         task_rad = [[10 for i in range(2*len(task.rel_position))] for task in active_tasks]
 
@@ -63,6 +91,29 @@ class TaskManager():
             return shortest_edges
         else:
             return "impossible"
+        
+    def __task_paths(self, active_tasks: list[Task], edges, log):
+        tasks_id = [TaskID(task.timespan, task.edges, task.rel_position) for task in active_tasks]
+
+        graph = build_graph(edges, tasks_id)
+        inconsistent_tasks = select_communication_inconsistent_tasks(graph, tasks_id, self.COMM_DISTANCE, log)
+        consistent_tasks = [task for task in tasks_id if task not in inconsistent_tasks]
+        
+        
+        if inconsistent_tasks:
+            paths_dicts = decomposition_path_guesses(inconsistent_tasks, graph, self.COMM_DISTANCE)[0]
+
+        paths = []
+        for task in tasks_id:
+            if task in consistent_tasks:
+                paths.append([task.edges])
+            if task in inconsistent_tasks:
+                path, _ = paths_dicts.paths_dict[task.ID]
+                path_list = [[path[i], path[i+1]] for i in range(len(path)-1)]
+                paths.append(path_list)
+                log(f"{path_list}")
+
+        return paths
 
     def load_task_path(self, task_path):
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -97,8 +148,8 @@ class TaskManager():
                 tmsg = TMsg()
                 tmsg.center.extend([float(e) for e in pos])
                 tmsg.size.extend([2. for _ in range(self.DIM * 2)])
-                tmsg.start = float(4)
-                tmsg.end = float(6)
+                tmsg.start = float(timespan[0]) - t + 3
+                tmsg.end = float(timespan[1]) - t + 3
                 tmsg.edge_i = int(edge[0])
                 tmsg.edge_j = int(edge[1])
                 tmsg.type = "always"

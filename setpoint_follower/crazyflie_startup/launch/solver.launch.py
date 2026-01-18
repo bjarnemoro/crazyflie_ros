@@ -18,19 +18,19 @@ def generate_launch_description():
     # Configure ROS nodes for launch
 
     # Setup project paths
-    pkg_project_crazyflie_gazebo = get_package_share_directory('crazyflie_ros2_setpoint_follower')
+    pkg_project_crazyflie_gazebo = get_package_share_directory('ros_gz_crazyflie_bringup')
 
-    # Setup to launch a crazyflie gazebo simulation from the ros_gz_crazyflie project
+    #Setup to launch a crazyflie gazebo simulation from the ros_gz_crazyflie project
     crazyflie_simulation = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(pkg_project_crazyflie_gazebo, 'launch', 'crazyflie_simulation_10.launch.py'))
+       PythonLaunchDescriptionSource(
+           os.path.join(pkg_project_crazyflie_gazebo, 'launch', 'crazyflie_simulation_10.launch.py'))
     )
 
     config = os.path.join(
-        get_package_share_directory('crazyflie_ros2_setpoint_follower'),
-        'config',
-        'config.yaml'
-        )
+       get_package_share_directory('crazyflie_ros2_setpoint_follower'),
+       'config',
+       'config.yaml'
+       )
 
     manager_node = Node(
         package='solve_setpoint',
@@ -38,7 +38,7 @@ def generate_launch_description():
         name='manager_node',
         output='screen',
         parameters=[
-            {'robot_prefix': '/manager_node'},
+            {'robot_prefix': '/crazyflie'},
             {'use_sim_time': True},
             config
         ]
@@ -49,7 +49,7 @@ def generate_launch_description():
             executable='agentMPC',
             output='screen',
             parameters=[
-                {'robot_prefix': 'crazyflie'},
+                {'robot_prefix': '/crazyflie'},
                 {'use_sim_time': True},
                 config
             ]

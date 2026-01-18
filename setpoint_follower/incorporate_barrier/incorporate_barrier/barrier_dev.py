@@ -15,7 +15,7 @@ from barrier_msg.srv import BCompSrv
 from barrier_msg.msg import BMsg, TMsg
 
 from incorporate_barrier.bMsg import bMsg, HyperCubeHandler
-from incorporate_barrier.MPC_barrier import optimize_path, optimize_path_first
+from incorporate_barrier.MPC_barrier import MPCsolver
 from solve_setpoint.solvers.combined_solve import solve_combined
 
 
@@ -50,8 +50,8 @@ class BarrierDev(Node):
         #task_box = [[20, 20, 20, 20, 20, 20], [10, 10, 10, 10, 10, 10], [10, 10, 10, 10, 10, 10], [10, 10, 10, 10, 10, 10]]
         return_mode = "relative"
 
-        succes, self.edge_pos, edge_box = solve_combined(self.task_paths, task_pos, task_box, return_mode)
-        self.abs_pos = solve_combined(self.task_paths, task_pos, task_box, "absolute")
+        succes, self.edge_pos, edge_box = solve_combined(self.task_paths, task_pos, task_box, return_mode, 10, 30)
+        self.abs_pos = solve_combined(self.task_paths, task_pos, task_box, "absolute", 10, 30)
 
         for (edge, pos), (_, box) in zip(self.edge_pos, edge_box):
             tmsg = TMsg()
@@ -331,15 +331,23 @@ def main(args=None):
     #     t = timespan[k]
     #     x0 = optimize_path(30, x0, t, node.msgs, agents, dt=DT, return_val=return_val)
     #     pos[k] = x0[:len(agents)*2]
+    agent = MPCsolver()
 
     return_val = "x0"
+    
+    horizon = 40
     x0 = np.zeros((len(agents)*2))
+    agent.initialize_problem(horizon, 0.0, node.msgs, agents, dt=DT, MAX_INPUT=0.3)
 
     pos = np.zeros((100, len(agents)*2))
     for k in range(100):
+        t0 = time.time()
         t = timespan[k]
-        x0 = optimize_path_first(30, x0, t, node.msgs, agents, dt=DT, return_val=return_val)
+        x0 = agent.recompute(horizon, x0, t, node.msgs, dt=0.1, return_val=return_val)
+        t1 = time.time()
         pos[k] = x0
+
+        print(t1 - t0)
     #print(pos[0].shape)
     
     #plt.scatter(pos[1][x_indices], pos[2][y_indices])

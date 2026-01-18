@@ -2,6 +2,9 @@ import numpy as np
 from copy import deepcopy
 from collections import defaultdict
 
+from nav_msgs.msg import Odometry
+from geometry_msgs.msg import PoseStamped
+
 #from barrier_msg.msg import Config
 
 class GraphManager:
@@ -13,50 +16,10 @@ class GraphManager:
         self.COMM_DISTANCE = comm_distance
 
         self.__agent_pos = np.zeros((self.NUM_AGENTS, 3))
-        self.__set_pos = np.zeros((self.NUM_AGENTS, 3))
         self.__comm_edges = None
         self.__comm_graph = None
-        self.__task_edges = None
-        self.__result_doubled = None
-        self.__comm_graph_res = None
 
-        self.online_status = np.zeros(10)
-
-    def init_setpoints(self):
-        self.__set_pos = deepcopy(self.__agent_pos)
-        self.__set_pos[:,2] = 1
-
-    def compute_setpoint(self, result):
-        edges = [edge for edge, _ in result]
-        self.dim = len(result[0][1])
-        self.__result_doubled = {tuple(edge):tuple(val) for edge, val in result}
-        self.__result_doubled.update({(edge[1], edge[0]): tuple(-val) for edge, val in result})
-
-        self.__comm_graph_res = defaultdict(list)
-
-        set_list = deepcopy(self.__agent_pos)
-
-        for u, v in edges:
-            self.__comm_graph_res[u].append(v)
-            self.__comm_graph_res[v].append(u)
-
-    def get_setpoints(self):
-        if self.__result_doubled == None:
-            return self.__set_pos
-        else:
-            setpoints = deepcopy(self.__agent_pos)
-
-            for key in self.__comm_graph_res:
-                tot_diff = np.zeros(self.dim)
-                for n in self.__comm_graph_res[key]:
-                    desired = np.array(self.__result_doubled[(key, n)])
-                    actual = self.__agent_pos[n][:self.dim] - self.__agent_pos[key][:self.dim]
-                    difference = actual - desired
-                    tot_diff += difference
-
-                setpoints[key][:self.dim] += tot_diff
-
-            return setpoints
+        self.online_status = np.zeros(self.NUM_AGENTS)
 
     def calc_edges(self):
         edges = []
@@ -71,14 +34,21 @@ class GraphManager:
         else:
             return False
 
-    def set_pos_callback(self, msg, idx):
+    def set_pos_callback(self, msg, idx, log):
         """set the position of an agent by index"""
+        
+    
         if not self.online_status[idx]:
             self.online_status[idx] = 1
 
-        self.__agent_pos[idx][0] = msg.pose.pose.position.x
-        self.__agent_pos[idx][1] = msg.pose.pose.position.y
-        self.__agent_pos[idx][2] = msg.pose.pose.position.z
+        if type(msg) == Odometry:
+            self.__agent_pos[idx][0] = msg.pose.pose.position.x
+            self.__agent_pos[idx][1] = msg.pose.pose.position.y
+            self.__agent_pos[idx][2] = msg.pose.pose.position.z
+        elif type(msg) == PoseStamped:
+            self.__agent_pos[idx][0] = msg.pose.position.x
+            self.__agent_pos[idx][1] = msg.pose.position.y
+            self.__agent_pos[idx][2] = msg.pose.position.z
 
     def get_weights(self):
         weights = {}
@@ -100,7 +70,7 @@ class GraphManager:
 
     def __set_edges(self, edges):
         self.__comm_edges = edges
-        self.__comm_graph = [[] for _ in range(len(self.__comm_edges))]
+        self.__comm_graph = defaultdict(list)
 
         for edge in self.__comm_edges:
             self.__comm_graph[edge[0]].append(edge[1])

@@ -15,22 +15,36 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    # Configure ROS nodes for launch
+
     config = os.path.join(
         get_package_share_directory('crazyflie_ros2_setpoint_follower'),
         'config',
-        'config.yaml'
+        'config_real.yaml'
         )
-    
-    barrier_dev = Node(
-        package='incorporate_barrier',
-        executable='barrier_dev',
-        name='barrier_dev',
+
+    manager_node = Node(
+        package='solve_setpoint',
+        executable='manager',
+        name='manager_node',
         output='screen',
         parameters=[
-            {'robot_prefix': '/barrier_dev'},
-            {'use_sim_time': False}
+            {'robot_prefix': '/cf'},
+            {'use_sim_time': False},
+            config
         ]
     )
+
+    agent_node = Node(
+            package='solve_setpoint',
+            executable='agentMPC',
+            output='screen',
+            parameters=[
+                {'robot_prefix': '/cf'},
+                {'use_sim_time': False},
+                config
+            ]
+        )
     
     barrier_service = Node(
         package='barrier_builder',
@@ -45,6 +59,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        barrier_dev,
-        barrier_service
+        agent_node,
+        barrier_service,
+        manager_node
         ])

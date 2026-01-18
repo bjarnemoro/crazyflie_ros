@@ -21,17 +21,17 @@ def generate_launch_description():
         'config.yaml'
         )
     
-    barrier_dev = Node(
-        package='incorporate_barrier',
-        executable='barrier_dev',
-        name='barrier_dev',
+    control = Node(
+        package='solve_setpoint',
+        executable='control',
+        name='control',
         output='screen',
         parameters=[
-            {'robot_prefix': '/barrier_dev'},
+            {'robot_prefix': '/barrier_service'},
             {'use_sim_time': False}
         ]
     )
-    
+
     barrier_service = Node(
         package='barrier_builder',
         executable='barrier_server',
@@ -45,6 +45,6 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        barrier_dev,
+        control,
         barrier_service
         ])

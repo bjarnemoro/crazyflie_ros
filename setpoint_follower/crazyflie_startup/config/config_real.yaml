@@ -1,12 +1,12 @@
 /**: 
   ros__parameters:
-    SYSTEM: 0 #0: SIM or 1: REAL
+    SYSTEM: 1 #0: SIM or 1: REAL
     DIM: 2
-    NUM_AGENTS: 10
+    NUM_AGENTS: 4
     MAIN_TIMER: 0.1
     SETPOINT_TIMER: 0.1
-    AGENT_TIMER: 0.05
-    SPEED: 0.4
+    AGENT_TIMER: 0.02
+    SPEED: 0.3
 
     SIDE_LENGTH: 10.
     ARENA_SIZE: 100.

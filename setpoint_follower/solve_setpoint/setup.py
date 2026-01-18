@@ -23,7 +23,8 @@ setup(
         'console_scripts': [
             'agent = solve_setpoint.agent:main',
             'manager = solve_setpoint.managers:main',
-            'agentMPC = solve_setpoint.agent_MPC:main'
+            'agentMPC = solve_setpoint.agent_MPC:main',
+            'control = solve_setpoint.control:main'
         ],
     },
 )

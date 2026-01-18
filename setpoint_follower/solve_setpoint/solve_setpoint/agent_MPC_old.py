@@ -8,17 +8,13 @@ from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped
 from geometry_msgs.msg import Twist
-from crazyflie_interfaces.msg import Position, FullState
+from crazyflie_interfaces.msg import FullState
 from rclpy.executors import MultiThreadedExecutor
 
 #from barrier_msg.msg import Config
 from barrier_msg.msg import BMsg, BMsglist
 from solve_setpoint.bMsg import bMsg, HyperCubeHandler
 from incorporate_barrier.MPC_barrier import MPCsolver
-from crazyflie_interfaces.srv import Takeoff
-
-LAND_TIME = 7.5
-HEIGHT = 1.0
 
 class Mode:
     SIM = 0
@@ -53,33 +49,21 @@ class MPC_agents(Node):
         if self.SYSTEM == Mode.SIM:
             self.drones = ['{}{}'.format(self.robot_prefix, i) for i in range(1,self.NUM_AGENTS+1)]
         elif self.SYSTEM == Mode.REAL:
-            self.drones = []
-
-            for srv_name, srv_types in self.get_service_names_and_types():
-                if 'crazyflie_interfaces/srv/StartTrajectory' in srv_types:
-                    # remove '/' and '/start_trajectory'
-                    cfname = srv_name[1:-17]
-                    if cfname != 'all':
-                        self.drones.append(cfname)
+            self.drones = [self.robot_prefix + '{0:0=2d}'.format(i) for i in range(1,self.NUM_AGENTS+1)]
 
         odom_name = {Mode.SIM: "/odom", Mode.REAL: "/pose"}
         odom_type = {Mode.SIM: Odometry, Mode.REAL: PoseStamped}
 
-        cmd_name = {Mode.SIM: "/cmd_vel", Mode.REAL: "/cmd_position"}
-        cmd_type = {Mode.SIM: Twist, Mode.REAL: Position}
+        cmd_name = {Mode.SIM: "/cmd_vel", Mode.REAL: "/cmd_full_state"}
+        cmd_type = {Mode.SIM: Twist, Mode.REAL: FullState}
 
         self.odom_subscribers = []
         self.twist_publishers = []
-        self.takeoff_services = []
         for i, drone in enumerate(self.drones):
             callback = lambda msg, idx=i: self.odom_callback(msg, idx)
             self.odom_subscribers.append(self.create_subscription(
                 odom_type[self.SYSTEM], drone + odom_name[self.SYSTEM], callback, 10))
             self.twist_publishers.append(self.create_publisher(cmd_type[self.SYSTEM], drone + cmd_name[self.SYSTEM], 10))
-            takeoffService = self.create_client(Takeoff, drone + '/takeoff')
-            while not takeoffService.wait_for_service(timeout_sec=1.0):
-                self.get_logger().info('takeoff service not available, waiting again...')
-            self.takeoff_services.append(takeoffService)
             
                 
         self.pos = np.zeros((self.NUM_AGENTS, 3))
@@ -97,14 +81,14 @@ class MPC_agents(Node):
         self.k = 2
         self.active = False
         self.is_set = False
-        self.called_takeoff = False
 
-        self.start_set = False
-        self.start_pos = np.zeros((3, self.NUM_AGENTS))
+        self.start_pos = np.array([[0.0, 0.0, 0.0],
+                                   [0.0, -0.4, 0.0],
+                                   [0.4, -0.4, 0.0]])
         
         self.saved_pos = self.start_pos.copy()
 
-        self.heights = [0.8, 1.0, 1.0, 0.8]
+        self.heights = [0.4, 0.5, 0.6]
 
     def odom_callback(self, msg, idx=0):
         if type(msg) == Odometry:
@@ -124,7 +108,6 @@ class MPC_agents(Node):
         self.angles[idx, 0] = euler[0]
         self.angles[idx, 1] = euler[1]
         self.angles[idx, 2] = euler[2]
-
 
     def set_boundary_msgs(self, msg):
         self.get_logger().info(f"received barrier msgs")
@@ -172,7 +155,7 @@ class MPC_agents(Node):
 
         #if time_sec > 5:
         #    self.mode = "MPC"
-        if time_sec > LAND_TIME:
+        if time_sec > 12:
             self.mode = "land"
             
             if not self.is_set:
@@ -187,21 +170,24 @@ class MPC_agents(Node):
                     msg.linear.z = np.clip(1. - self.pos[idx, 2], -self.Y_SPEED, self.Y_SPEED)
                     publisher.publish(msg)
             if self.SYSTEM == Mode.REAL:
-                if not self.called_takeoff:
-                    for idx, publisher in enumerate(self.twist_publishers):
-                        self.takeoff(self.heights[idx], 2.0, idx)
-
-                self.called_takeoff = True
+                for idx in range(len(self.twist_publishers)):
+                    twist = Twist()
+                    h = 0.5
+                    twist.linear.z = np.clip(self.k * (self.heights[idx] - self.pos[idx, 2]), -self.Y_SPEED, self.Y_SPEED)
+                    twist.linear.x = np.clip(self.k * (self.start_pos[idx, 0] - self.pos[idx, 0]), -self.SPEED, self.SPEED)
+                    twist.linear.y = np.clip(self.k * (self.start_pos[idx, 1] - self.pos[idx, 1]), -self.SPEED, self.SPEED)
+                    twist.angular.z = np.clip(0. - self.angles[idx, 2], -self.SPEED, self.SPEED)
+                    self.update_full_state(twist, idx)
 
         elif self.mode == "MPC":
             if self.DIM == 2:
                 x0 = self.pos[:,:2].flatten()
             elif self.DIM == 3:
                 x0 = self.pos.flatten()
-            return_val = "x0"#"input"
+            return_val = "input"
 
             if self.active:
-                x_new = self.solver.recompute(20, x0, time_sec+3, self.barriers, dt=dt_sec, return_val=return_val)
+                u = self.solver.recompute(20, x0, time_sec+3, self.barriers, dt=dt_sec, return_val=return_val)
             else:
                 u = np.zeros((self.NUM_AGENTS*self.DIM,))
 
@@ -210,18 +196,29 @@ class MPC_agents(Node):
                     msg = Twist()
                     msg.linear.x = u[self.DIM*idx+0]
                     msg.linear.y = u[self.DIM*idx+1]
-                    msg.linear.z = np.clip(self.heights[idx] - self.pos[idx, 2], -self.Y_SPEED, self.Y_SPEED)
+                    msg.linear.z = np.clip(1. - self.pos[idx, 2], -self.Y_SPEED, self.Y_SPEED)
 
                     msg.angular.z = np.clip(0. - self.angles[idx, 2], -self.SPEED, self.SPEED)
                     publisher.publish(msg)
             if self.SYSTEM == Mode.REAL:
-                for idx, publisher in enumerate(self.twist_publishers):
-                    pos = Position()
-                    pos.x = x_new[self.DIM*idx+0]#self.start_pos[idx][0]
-                    pos.y = x_new[self.DIM*idx+1]#self.start_pos[idx][1]
-                    pos.z = min(1.+0.2, 1.)
-                    pos.yaw = 0.
-                    publisher.publish(pos)
+                for idx in range(len(self.twist_publishers)):
+                    twist = Twist()
+                    h = 0.5
+
+                    #if np.linalg.norm(u[self.DIM*idx:self.DIM*idx+self.DIM]) > 0.05:
+                    twist.linear.z = np.clip(self.k * (self.heights[idx] - self.pos[idx, 2]), -self.Y_SPEED, self.Y_SPEED)
+                    twist.linear.x = u[self.DIM*idx+0]
+                    twist.linear.y = u[self.DIM*idx+1]
+                    twist.angular.z = np.clip(0. - self.angles[idx, 2], -self.SPEED, self.SPEED)
+                    self.update_full_state(twist, idx)
+                    self.saved_pos = self.pos.copy()
+                    # else:
+                    #     self.get_logger().info(f"not moving! {idx}")
+                    #     twist.linear.z = np.clip(self.k * (h - self.pos[idx, 2]), -self.SPEED, self.SPEED)
+                    #     twist.linear.x = np.clip(self.k * (self.saved_pos[idx, 0] - self.pos[idx, 0]), -self.SPEED, self.SPEED)
+                    #     twist.linear.y = np.clip(self.k * (self.saved_pos[idx, 1] - self.pos[idx, 1]), -self.SPEED, self.SPEED)
+                    #     twist.angular.z = np.clip(0. - self.angles[idx, 2], -self.SPEED, self.SPEED)
+                    #     self.update_full_state(twist, idx)
 
             
 
@@ -232,13 +229,14 @@ class MPC_agents(Node):
                     msg.linear.z = np.clip(0. - self.pos[idx, 2], -self.Y_SPEED, self.Y_SPEED)
                     publisher.publish(msg)
             if self.SYSTEM == Mode.REAL:
-                for idx, publisher in enumerate(self.twist_publishers):
-                    pos = Position()
-                    pos.x = self.saved_pos[idx][0]
-                    pos.y = self.saved_pos[idx][1]
-                    pos.z = min(self.heights[idx]-self.heights[idx]*(time_sec-LAND_TIME)/2, 1.)
-                    pos.yaw = 0.
-                    publisher.publish(pos)
+                for idx in range(len(self.twist_publishers)):
+                    twist = Twist()
+                    h = 0.05
+                    twist.linear.z = np.clip(self.k * (h - self.pos[idx, 2]), -self.Y_SPEED, self.Y_SPEED)
+                    twist.linear.x = np.clip(self.k * (self.land_pos[idx, 0] - self.pos[idx, 0]), -self.SPEED, self.SPEED)
+                    twist.linear.y = np.clip(self.k * (self.land_pos[idx, 1] - self.pos[idx, 1]), -self.SPEED, self.SPEED)
+                    twist.angular.z = np.clip(0. - self.angles[idx, 2], -self.SPEED, self.SPEED)
+                    self.update_full_state(twist, idx)
 
         else:
             raise ValueError("mode supposed to be startup or MPC")
@@ -261,13 +259,6 @@ class MPC_agents(Node):
         self.full_state.twist.angular.z = twist.angular.z
         
         self.twist_publishers[idx].publish(self.full_state)
-
-    def takeoff(self, targetHeight, duration, idx, groupMask=0):
-        req = Takeoff.Request()
-        req.group_mask = groupMask
-        req.height = targetHeight
-        req.duration = rclpy.duration.Duration(seconds=duration).to_msg()
-        self.takeoff_services[idx].call_async(req)
 
     def setpoint_callback(self, msg):
         msg = PoseStamped()
