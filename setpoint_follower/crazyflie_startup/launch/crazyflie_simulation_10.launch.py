@@ -28,16 +28,17 @@ from launch_ros.actions import Node
  
 
 def create_new_sdf(name):
-    #pkg_project_gazebo = get_package_share_directory('ros_gz_crazyflie_gazebo')
-    pkg_project_gazebo = os.environ.get("GZ_SIM_RESOURCE_PATH")
-    SDF_PATH = os.path.join(pkg_project_gazebo, 'crazyflie/model.sdf')
+    pkg_10_world = get_package_share_directory('crazyflie_ros2_setpoint_follower')
+    SDF_PATH = os.path.join(pkg_10_world, 'models/crazyflie/model.sdf')
 
     with open(SDF_PATH) as f:
         sdf = f.read()
 
     sdf = sdf.replace("<robotNamespace>crazyflie</robotNamespace>", "<robotNamespace>{}</robotNamespace>".format(name))
 
-    filepath = os.path.join(pkg_project_gazebo, "crazyflie/{}.sdf".format(name))
+    sdf = sdf.replace("<robotNamespace>crazyflie</robotNamespace>", "<robotNamespace>{}</robotNamespace>".format(name))
+
+    filepath = os.path.join(pkg_10_world, "models/crazyflie/{}.sdf".format(name))
     file = open(filepath, "w")
     file.write(sdf)
     
@@ -78,7 +79,9 @@ def generate_launch_description():
         default_value='True'
     )
     # Setup project paths
+    pkg_project_bringup = get_package_share_directory('ros_gz_crazyflie_bringup')
     pkg_project_gazebo = get_package_share_directory('ros_gz_crazyflie_gazebo')
+    pkg_10_world = get_package_share_directory('crazyflie_ros2_setpoint_follower')
     pkg_ros_gz_sim = get_package_share_directory('ros_gz_sim')
 
     # Setup to launch the simulator and Gazebo world
@@ -86,7 +89,7 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(pkg_ros_gz_sim, 'launch', 'gz_sim.launch.py')),
             condition=IfCondition(LaunchConfiguration('gazebo_launch')),
-        launch_arguments={'gz_args': os.path.join(pkg_project_gazebo, 'worlds', 
+        launch_arguments={'gz_args': os.path.join(pkg_10_world, 'config', 
         'crazyflie_world_10.sdf') + ' -r'}.items(),
     )
 
@@ -103,12 +106,9 @@ def generate_launch_description():
         ('-0.33', '-1.0', '0'),
         ('-1.0', '0.5', '0'),
         ('-1.0', '-0.5', '0')]
-    
     drone_spawns = []
     for drone, pos in zip(drones, pos2):
         temp_file = create_new_sdf(drone)
-
-        print(temp_file.name)
 
         start_gazebo_ros_spawner_cmd = Node(
         package='ros_gz_sim',
