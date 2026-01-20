@@ -6,7 +6,6 @@ import random,itertools
 from typing import List
 
 Path = List[float]  # type alias
-plt.style.use("seaborn-v0_8")
 
 # communication radius
 R = 1.0
