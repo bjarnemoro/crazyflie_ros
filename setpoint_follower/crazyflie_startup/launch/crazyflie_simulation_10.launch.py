@@ -14,6 +14,7 @@
 
 import os
 import tempfile
+import yaml
 
 from ament_index_python.packages import get_package_share_directory
 
@@ -44,9 +45,10 @@ def create_new_sdf(name):
     
     return file
 
-def generate_bridge(drone_names):
+def generate_bridge(drone_indices):
     bridge_nodes = []
-    for drone in drone_names:
+    for drone_id in drone_indices:
+        drone   = 'crazyflie{}'.format(drone_id)
         cmd_arg = ("/{}/gazebo/command/twist@geometry_msgs/msg/Twist]gz.msgs.Twist".format(drone), 
         "/{}/cmd_vel".format(drone), 
         "/{}/gazebo/command/twist".format(drone), 
@@ -71,6 +73,66 @@ def generate_bridge(drone_names):
 
     return bridge_nodes
 
+def drone_positions_from_config(config_path):
+    """
+    Load drone positions from a ROS 2 parameter YAML file.
+
+    Expected structure:
+      /**:
+        ros__parameters:
+          NUM_AGENTS: N
+          POSITIONS:
+            POS_1: [x, y, z]
+            ...
+
+    Args:
+      config_path (str): Path to YAML config file
+
+    Returns:
+      dict[int, list[float]]: { drone_index: [x, y, z] }
+    """
+    with open(config_path, "r") as f:
+        cfg = yaml.safe_load(f)
+
+    
+
+    if "/**" not in cfg:
+        raise RuntimeError("Missing '/**' root key in config")
+
+    params = cfg["/**"].get("ros__parameters", {})
+    
+    if params is None :
+        raise  RuntimeError("Current parameter file seems to be broken. Make sure that the keys are nested under ros__parameters")
+
+    if "NUM_AGENTS" not in params:
+        raise RuntimeError("NUM_AGENTS not defined in config")
+
+    if "POSITIONS" not in params:
+        raise RuntimeError("POSITIONS not defined in config")
+
+    num_agents = params["NUM_AGENTS"]
+    positions_cfg = params["POSITIONS"]
+
+    positions = {}
+
+    for i in range(1, num_agents + 1):
+        key = f"POS_{i}"
+
+        if key not in positions_cfg:
+            raise RuntimeError(f"Given number of agents is {num_agents}. Missing position for drone {i} ({key}). Count starts from 1")
+
+        value = positions_cfg[key]
+
+        if not isinstance(value, list) or len(value) != 3:
+            raise ValueError(
+                f"{key} must be a list of 3 numbers [x, y, z]"
+            )
+
+        positions[i] = [float(v) for v in value]
+
+    return positions
+
+
 def generate_launch_description():
     # Configure ROS nodes for launch
 
@@ -94,20 +156,18 @@ def generate_launch_description():
     )
 
     #bridge_nodes = generate_bridge_nodes(drones)
-    drones = ['crazyflie{}'.format(i) for i in range(1,11)]
-    pos2 = [
-        ('1.0', '0.5', '0'),
-        ('1.0', '-0.5', '0'),
-        ('0.33', '1.0', '0'),
-        ('0.33', '0.0', '0'),
-        ('0.33', '-1.0', '0'),
-        ('-0.33', '1.0', '0'),
-        ('-0.33', '0.0', '0'),
-        ('-0.33', '-1.0', '0'),
-        ('-1.0', '0.5', '0'),
-        ('-1.0', '-0.5', '0')]
-    drone_spawns = []
-    for drone, pos in zip(drones, pos2):
+    config_path = os.path.join(
+        pkg_10_world,
+        'config',
+        'config.yaml'
+    )
+    
+    drones_position = drone_positions_from_config(config_path)
+    
+    drone_spawns    = []
+    for drone_id, pos in drones_position.items():
+        
+        drone     = 'crazyflie{}'.format(drone_id)
         temp_file = create_new_sdf(drone)
 
         start_gazebo_ros_spawner_cmd = Node(
@@ -116,16 +176,16 @@ def generate_launch_description():
         arguments=[
             '-name', drone,
             '-file', temp_file.name,
-            '-x', pos[0],
-            '-y', pos[1],
-            '-z', pos[2]
+            '-x', str(pos[0]),
+            '-y', str(pos[1]),
+            '-z', str(pos[2])
         ],
         output='screen')
         drone_spawns.append(start_gazebo_ros_spawner_cmd)
 
         #temp_file.close()
 
-    gen_nodes = generate_bridge(drones)
+    gen_nodes = generate_bridge(drones_position.keys())
 
     arg = "/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock"
     clock_bridge = Node(
@@ -137,23 +197,23 @@ def generate_launch_description():
     )
 
     cmd_bridges = []
-    for drone in drones:
+    for drone_id in drones_position.keys():
         cmd_bridge = Node(
             package="ros_gz_bridge",
             executable="parameter_bridge",
             name=f"{drone}_cmd_bridge",
-            arguments=["/{}/gazebo/command/twist@geometry_msgs/msg/Twist]gz.msgs.Twist".format(drone)],
+            arguments=["/crazyflie{}/gazebo/command/twist@geometry_msgs/msg/Twist]gz.msgs.Twist".format(drone_id)],
             remappings=[("/{}/gazebo/command/twist".format(drone), "/{}/cmd_vel".format(drone))],
             output="screen"
         )
         cmd_bridges.append(cmd_bridge)
 
     tf_bridges = []
-    for drone in drones:
+    for drone_id in drones_position.keys():
         tf_node = Node(
             package='tf2_ros',
             executable='static_transform_publisher',
-            arguments=['0', '0', '0', '0', '0', '0', 'world', '{}/odom'.format(drone)],
+            arguments=['0', '0', '0', '0', '0', '0', 'world', 'crazyflie{}/odom'.format(drone_id)],
             output='screen'
         )
         tf_bridges.append(tf_node)

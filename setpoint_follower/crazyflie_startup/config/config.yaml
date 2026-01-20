@@ -3,11 +3,78 @@
     SYSTEM: 0 #0: SIM or 1: REAL
     DIM: 2
     NUM_AGENTS: 10
+
     MAIN_TIMER: 0.1
     SETPOINT_TIMER: 0.1
     AGENT_TIMER: 0.05
     SPEED: 0.4
 
-    SIDE_LENGTH: 10.
-    ARENA_SIZE: 100.
-    MAX_INPUT: 10.
+    SIDE_LENGTH: 10.0
+    ARENA_SIZE: 100.0
+    MAX_INPUT: 10.0
+
+    POSITIONS:
+      POS_1:  [ 1.0,   0.5,  0.0 ]
+      POS_2:  [ 1.0,  -0.5,  0.0 ]
+      POS_3:  [ 0.33,  1.0,  0.0 ]
+      POS_4:  [ 0.33,  0.0,  0.0 ]
+      POS_5:  [ 0.33, -1.0,  0.0 ]
+      POS_6:  [ -0.33,  1.0,  0.0 ]
+      POS_7:  [ -0.33,  0.0,  0.0 ]
+      POS_8:  [ -0.33, -1.0,  0.0 ]
+      POS_9:  [ -1.0,   0.5,  0.0 ]
+      POS_10: [ -1.0,  -0.5,  0.0 ]
+
+
+    TASKS:
+      - timespan: [4.0, 9.0]
+        edges: [0.0, 9.0]
+        rel_position: [-2.0, -1.0]
+
+      - timespan: [4.0, 9.0]
+        edges: [4.0, 5.0]
+        rel_position: [0.0, 1.6]
+
+      - timespan: [10.0, 13.0]
+        edges: [1.0, 8.0]
+        rel_position: [-2.0, 1.0]
+
+      - timespan: [10.0, 13.0]
+        edges: [7.0, 2.0]
+        rel_position: [0.2, 1.6]
+
+      - timespan: [4.0, 15.0]
+        edges: [5.0, 8.0]
+        rel_position: [0.0, -1.0]
+
+      - timespan: [4.0, 15.0]
+        edges: [8.0, 6.0]
+        rel_position: [0.0, -1.0]
+
+      - timespan: [4.0, 15.0]
+        edges: [6.0, 9.0]
+        rel_position: [0.0, -1.0]
+
+      - timespan: [4.0, 15.0]
+        edges: [9.0, 7.0]
+        rel_position: [0.0, -1.0]
+
+      - timespan: [4.0, 15.0]
+        edges: [6.0, 3.0]
+        rel_position: [0.5, 0.0]
+
+      - timespan: [4.0, 15.0]
+        edges: [3.0, 0.0]
+        rel_position: [0.6, 0.6]
+
+      - timespan: [4.0, 15.0]
+        edges: [0.0, 2.0]
+        rel_position: [0.6, 0.6]
+
+      - timespan: [4.0, 15.0]
+        edges: [3.0, 1.0]
+        rel_position: [0.6, -0.6]
+
+      - timespan: [4.0, 15.0]
+        edges: [1.0, 4.0]
+        rel_position: [0.6, -0.6]

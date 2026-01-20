@@ -44,6 +44,7 @@ class Manager(Node):
         self.declare_parameter("SETPOINT_TIMER", 0.1)
         self.declare_parameter("COMM_DISTANCE", 1.1)
         self.declare_parameter("BOX_WEIGHT", 10)
+        self.declare_parameter("TASKS", [])
 
         self.SYSTEM = self.get_parameter("SYSTEM").value
         self.DIM = self.get_parameter("DIM").value
@@ -52,29 +53,11 @@ class Manager(Node):
         self.SETPOINT_TIMER = self.get_parameter("SETPOINT_TIMER").value
         self.COMM_DISTANCE = self.get_parameter("COMM_DISTANCE").value
         self.BOX_WEIGHT = self.get_parameter("BOX_WEIGHT").value
+        tasks           = self.get_parameter("TASKS").value
 
         #setup the tasks that are to be done
-        if self.DIM  == 2:
-            self.tasks = [
-                Task([3,9], [0,1], [0.0, -0.8]),
-                Task([3,9], [1,2], [-0.8, 0.0]),
-                Task([10,15], [0,1], [-0.8, 0.0]),
-                Task([10,15], [1,2], [0.0, -0.8]),
-            ]
-            self.tasks = [
-                Task([3,9], [0,1], [0.0, -0.6]),
-                Task([3,9], [2,0], [0.0, -0.6]),
-                Task([3,9], [1,3], [0.0, -0.6]),
-                Task([10,15], [0,1], [0.0, -0.8]),
-                Task([10,15], [2,0], [-0.8, 0.0]),
-                Task([10,15], [1,3], [-0.8, 0.0]),
-            ]
-        elif self.DIM  == 3:
-            self.tasks = [
-                Task([4,9], [0,9], [-2,-1, 1]),
-                Task([4,9], [4,5], [0, 1.6, 0.5]),
-                Task([10,13], [1,8], [-2, 1, 0.2]),
-                Task([10,13], [7,2], [0.2, 1.6, -1])]
+        self.tasks = [Task(**t) for t in tasks]
+        
 
         #setup the graph manager and task manager
         self.graph_manager = GraphManager(self.NUM_AGENTS, self.COMM_DISTANCE)
