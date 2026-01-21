@@ -71,15 +71,18 @@ class MPC_agents(Node):
         self.odom_subscribers = []
         self.twist_publishers = []
         self.takeoff_services = []
+        
         for i, drone in enumerate(self.drones):
             callback = lambda msg, idx=i: self.odom_callback(msg, idx)
             self.odom_subscribers.append(self.create_subscription(
                 odom_type[self.SYSTEM], drone + odom_name[self.SYSTEM], callback, 10))
             self.twist_publishers.append(self.create_publisher(cmd_type[self.SYSTEM], drone + cmd_name[self.SYSTEM], 10))
-            takeoffService = self.create_client(Takeoff, drone + '/takeoff')
-            while not takeoffService.wait_for_service(timeout_sec=1.0):
-                self.get_logger().info('takeoff service not available, waiting again...')
-            self.takeoff_services.append(takeoffService)
+
+            if self.SYSTEM == Mode.REAL:
+                takeoffService = self.create_client(Takeoff, drone + '/takeoff')
+                while not takeoffService.wait_for_service(timeout_sec=1.0):
+                    self.get_logger().info('takeoff service not available, waiting again...')
+                self.takeoff_services.append(takeoffService)
             
                 
         self.pos = np.zeros((self.NUM_AGENTS, 3))
@@ -89,7 +92,8 @@ class MPC_agents(Node):
         self.timer = self.create_timer(self.AGENT_TIMER, self.MPC_callback)
 
         self.mode = "startup"
-        self.past_time = 0
+        self.wait_for_time()
+        self.past_time = 0.
         self.start_time = self.get_clock().now().nanoseconds
 
         self.barriers = []
@@ -104,7 +108,8 @@ class MPC_agents(Node):
         
         self.saved_pos = self.start_pos.copy()
 
-        self.heights = [0.8, 1.0, 1.0, 0.8]
+        self.heights = [0.8, 1.0, 1.0, 0.8] 
+        self.get_logger().info('Finish startup')
 
     def odom_callback(self, msg, idx=0):
         if type(msg) == Odometry:
@@ -127,7 +132,7 @@ class MPC_agents(Node):
 
 
     def set_boundary_msgs(self, msg):
-        self.get_logger().info(f"received barrier msgs")
+        self.get_logger().info(f"Received Incoming barrier function messages. Starting MPC mode")
 
         self.barriers = []
         for bmsg in msg.messages:
@@ -174,6 +179,7 @@ class MPC_agents(Node):
         #    self.mode = "MPC"
         if time_sec > LAND_TIME:
             self.mode = "land"
+            self.get_logger().info(f'Staring Landing .... Current time {time_sec}. Initial time {self.start_time}')
             
             if not self.is_set:
                 self.land_pos = self.pos.copy()
@@ -182,6 +188,7 @@ class MPC_agents(Node):
 
         if self.mode == "startup":
             if self.SYSTEM == Mode.SIM:
+                self.get_logger().info('Taking off ...')
                 for idx, publisher in enumerate(self.twist_publishers):
                     msg = Twist()
                     msg.linear.z = np.clip(1. - self.pos[idx, 2], -self.Y_SPEED, self.Y_SPEED)
@@ -194,6 +201,7 @@ class MPC_agents(Node):
                 self.called_takeoff = True
 
         elif self.mode == "MPC":
+            self.get_logger().info('Entering MPC mode. Mission start ...')
             if self.DIM == 2:
                 x0 = self.pos[:,:2].flatten()
             elif self.DIM == 3:
@@ -275,6 +283,11 @@ class MPC_agents(Node):
         msg.pose.linear.y = 0
         msg.pose.linear.z = 0
         msg.pose.angular.z = 0
+    
+    def wait_for_time(self):
+        while self.get_clock().now().nanoseconds == 0:
+            self.get_logger().info("Waiting for valid ROS time...")
+            rclpy.spin_once(self, timeout_sec=0.1)
 
 
 def signal_handler(sig, frame):

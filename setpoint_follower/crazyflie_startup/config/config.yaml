@@ -28,6 +28,10 @@
 
     TASKS:
       - timespan: [4.0, 9.0]
+        edges: [1, 1]
+        rel_position: [-2.0, -1.0]
+
+      - timespan: [4.0, 9.0]
         edges: [0.0, 9.0]
         rel_position: [-2.0, -1.0]
 
