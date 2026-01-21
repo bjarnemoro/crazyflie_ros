@@ -30,9 +30,12 @@ class TaskID(Task):
 
 class TaskManager():
     def __init__(self, dim, comm_dist, tasks=None, task_path=None):
-        """load the the tasks either via a json file or an array of tasks with the following structure:
+        """
+        Load the the tasks either via a json file or an array of tasks with the following structure:
         [([],[],[]), ..., ([],[],[])] with each tuple having time period, agent idx, relative pos
-        i.e [0,3], [0, 4], [10, 20] so from time 0 to 3 sec agent 0 has a postion of [10, 20] compared to agent 4"""
+        i.e [0,3], [0, 4], [10, 20] so from time 0 to 3 sec agent 0 has a postion of [10, 20] compared to agent 4
+        """
+
         self.DIM = dim
         self.COMM_DISTANCE = comm_dist
 

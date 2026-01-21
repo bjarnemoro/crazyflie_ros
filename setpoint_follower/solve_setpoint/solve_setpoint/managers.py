@@ -7,6 +7,7 @@ from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Int32MultiArray
+from std_msgs.msg import Int32
 from rclpy.executors import MultiThreadedExecutor
 from msg_interface.msg import TaskEdge, TaskEdgeList
 from barrier_msg.srv import BCompSrv
@@ -16,14 +17,7 @@ from solve_setpoint.bMsg import bMsg, HyperCubeHandler
 from solve_setpoint.graph_manager import GraphManager
 from solve_setpoint.task_manager import TaskManager, Task
 from solve_setpoint.solvers.combined_solve import solve_combined
-
-class State:
-    START_DRONE = 0
-    MAINLOOP = 1
-
-class Mode:
-    SIM = 0
-    REAL = 1
+from solve_setpoint.utils import WorkingMode, AgentState, ManagerState
 
 
 class Manager(Node):
@@ -33,19 +27,22 @@ class Manager(Node):
     these setpoints are calculated using optimization methods on given tasks
     """
     def __init__(self):
-        super().__init__('manager')
-        self.declare_parameter('robot_prefix', '/crazyflie')
+        super().__init__('manager',allow_undeclared_parameters=True, automatically_declare_parameters_from_overrides = True)
+        
+        # Parameters are declared from indie the yaml file. Since we have set 
+        # automatically_declare_parameters_from_overrides = true, then all the parameters inside
+        # the yaml file will be already automatically declared.
+
+        # self.declare_parameter('robot_prefix', '/crazyflie')
+        # self.declare_parameter("SYSTEM", 2)
+        # self.declare_parameter("DIM", 2)
+        # self.declare_parameter("NUM_AGENTS", 10)
+        # self.declare_parameter("MAIN_TIMER", 0.1)
+        # self.declare_parameter("SETPOINT_TIMER", 0.1)
+        # self.declare_parameter("COMM_DISTANCE", 1.1)
+        # self.declare_parameter("BOX_WEIGHT", 10)
+        
         self.robot_prefix = self.get_parameter('robot_prefix').value
-
-        self.declare_parameter("SYSTEM", 2)
-        self.declare_parameter("DIM", 2)
-        self.declare_parameter("NUM_AGENTS", 10)
-        self.declare_parameter("MAIN_TIMER", 0.1)
-        self.declare_parameter("SETPOINT_TIMER", 0.1)
-        self.declare_parameter("COMM_DISTANCE", 1.1)
-        self.declare_parameter("BOX_WEIGHT", 10)
-        self.declare_parameter("TASKS", [])
-
         self.SYSTEM = self.get_parameter("SYSTEM").value
         self.DIM = self.get_parameter("DIM").value
         self.NUM_AGENTS = self.get_parameter("NUM_AGENTS").value
@@ -53,10 +50,13 @@ class Manager(Node):
         self.SETPOINT_TIMER = self.get_parameter("SETPOINT_TIMER").value
         self.COMM_DISTANCE = self.get_parameter("COMM_DISTANCE").value
         self.BOX_WEIGHT = self.get_parameter("BOX_WEIGHT").value
-        tasks           = self.get_parameter("TASKS").value
+
+
 
         #setup the tasks that are to be done
-        self.tasks = [Task(**t) for t in tasks]
+        self.tasks = self._load_tasks()
+        self.get_logger().info(f"Loaded {len(self.tasks)} tasks")
+
         
 
         #setup the graph manager and task manager
@@ -67,9 +67,12 @@ class Manager(Node):
         self.triggered_times = set()
 
         #setup all the subscribers and publishers
-        if self.SYSTEM == Mode.SIM:
+        if self.SYSTEM == WorkingMode.SIM:
+            self.SYSTEM = WorkingMode.SIM
             self.drones = ['{}{}'.format(self.robot_prefix, i) for i in range(1,self.NUM_AGENTS+1)]
-        elif self.SYSTEM == Mode.REAL:
+        
+        elif self.SYSTEM == WorkingMode.REAL:
+            self.SYSTEM = WorkingMode.REAL
             self.drones = []
 
             for srv_name, srv_types in self.get_service_names_and_types():
@@ -78,10 +81,14 @@ class Manager(Node):
                     cfname = srv_name[1:-17]
                     if cfname != 'all':
                         self.drones.append(cfname)
+        else :
+            raise ValueError(f"The specified working mode {self.SYSTEM} is not valid. Choose 1 for real robots and 0 for simulation.")
+        
+        
         self.odom_subscribers = []
-
-        self.edge_publisher = self.create_publisher(Int32MultiArray, "/graph_edges", 10)
-        self.task_publisher = self.create_publisher(TaskEdgeList, "/task_edges", 10)
+        self.edge_publisher   = self.create_publisher(Int32MultiArray, "/graph_edges", 10)
+        self.task_publisher   = self.create_publisher(TaskEdgeList, "/task_edges", 10)
+        self.agent_state_sub  = self.create_subscription(Int32, "/agent_state", self.on_agent_message, 10)
 
         self.barrier_client = self.create_client(BCompSrv, '/compute_barriers')
         while not self.barrier_client.wait_for_service(timeout_sec=1.0):
@@ -89,8 +96,8 @@ class Manager(Node):
 
         self.barrier_publisher = self.create_publisher(BMsglist, "/barriers", 10)
         
-        odom_name = {Mode.SIM: "/odom", Mode.REAL: "/pose"}
-        odom_type = {Mode.SIM: Odometry, Mode.REAL: PoseStamped}
+        odom_name = {WorkingMode.SIM: "/odom", WorkingMode.REAL: "/pose"}
+        odom_type = {WorkingMode.SIM: Odometry, WorkingMode.REAL: PoseStamped}
 
         for i, drone in enumerate(self.drones):
             callback = lambda msg, idx=i: self.graph_manager.set_pos_callback(msg, idx, self.get_logger().info)
@@ -103,9 +110,10 @@ class Manager(Node):
         self.counter = 0
             
         #set the starting state
-        self.state = State.START_DRONE
-        modes = {0: "simulation", 1: "real"}
-        self.get_logger().info(f"\n\nStarting the manager in {modes[self.SYSTEM]} mode!!\n\n")
+        self.manager_state = ManagerState.WAITING_FOR_ODOMETRY
+        self.agent_state   = None
+        modes      = {0: "simulation", 1: "real"}
+        self.get_logger().info(f"Working in {self.SYSTEM.name} mode. Manager state {self.manager_state.name} !!")
 
     def send_barrier(self, future):
         try:
@@ -118,6 +126,22 @@ class Manager(Node):
 
         except Exception as e:
             self.get_logger().info(f"Service call failed: {e}", )
+
+    def on_agent_message(self,msg):
+        if msg.data == AgentState.TAKEOFF:
+            # Logic for ascending to target altitude
+            self.agent_state = AgentState.TAKEOFF
+            
+        elif msg.data == AgentState.READY:
+            # Logic for mission execution or hovering
+            self.agent_state = AgentState.READY
+            
+        elif msg.data == AgentState.LANDING:
+            # Logic for descending and disarming
+            self.agent_state = AgentState.LANDING
+            
+        else:
+            self.get_logger().info("Error: Unknown Agent State.")
 
     def graph_rviz(self, time_recalc):
         edge_recalc = self.graph_manager.calc_edges() 
@@ -150,12 +174,12 @@ class Manager(Node):
 
 
     def mainloop(self):
-        if self.state == State.START_DRONE:
+        if self.manager_state == ManagerState.WAITING_FOR_ODOMETRY:
             #check whether all drones have published their odometry
             if np.all(self.graph_manager.online_status):
                 #change state
-                self.get_logger().info("Received odom message from all agents, changing state")
-                self.state = State.MAINLOOP
+                self.get_logger().info(f"Received odom message from all agents, changing manager state to: {ManagerState.READY.name}")
+                self.manager_state = ManagerState.READY
 
                 #process the edges now that every agent is online
                 self.graph_manager.calc_edges()
@@ -174,11 +198,12 @@ class Manager(Node):
                     self.get_logger().info("Not all agents online yet")
                     self.counter = 0
 
-        elif self.state == State.MAINLOOP:
-            self.current_time = self.get_clock().now().nanoseconds/1e9
-            self.delta_time = self.current_time - self.prev_time
+        elif self.manager_state == ManagerState.READY and self.agent_state == AgentState.READY:
+            
+            self.current_time  = self.get_clock().now().nanoseconds/1e9
+            self.delta_time    = self.current_time - self.prev_time
             self.total_elapsed = self.current_time - self.start_time
-            self.prev_time = self.current_time
+            self.prev_time     = self.current_time
 
             time_recalc = False
             for t in self.recalc_times:
@@ -187,14 +212,13 @@ class Manager(Node):
                     time_recalc = True
 
             #returns whether the edges have changed
-            self.graph_rviz(time_recalc)
+            # self.graph_rviz(time_recalc)
 
             #-------------------------------
             #    Main optimization logic
             #-------------------------------
             if time_recalc:# or edge_recalc:
-                if time_recalc:
-                    self.get_logger().info("recaculating at: {}".format(self.total_elapsed))
+                self.get_logger().info("Recaculating at: {}".format(self.total_elapsed))
 
                 #calculate the current relative tasks based on the current weighted communication graph
                 comm_graph = self.graph_manager.get_comm_graph()
@@ -233,6 +257,42 @@ class Manager(Node):
                 else:
                     if "impossible" in task_paths:
                         self.get_logger().info("No valid communication graph at this time")
+
+    def _load_tasks(self):
+        """
+        Load TASKS from ROS 2 parameters using prefix parsing.
+        taken from https://gist.github.com/agrueneberg/d76fff493753fa531f1b5d33be0f07ed
+        """
+
+        params = self.get_parameters_by_prefix('TASKS')
+
+        if not params:
+            self.get_logger().warn("No TASKS parameters found")
+            return []
+
+        tasks_by_name = {}
+
+        for full_key, param in params.items():
+            # Example: "task_3.timespan"
+            task_name, field = full_key.split(".", 1)
+
+            tasks_by_name.setdefault(task_name, {})[field] = param.value
+
+            self.get_logger().info(
+                f"Loaded param: {task_name}.{field} = {param.value}"
+            )
+
+        tasks = []
+        for name, data in tasks_by_name.items():
+            try:
+                tasks.append(Task(**data))
+            except Exception as e:
+                self.get_logger().error(
+                    f"Failed to create Task '{name}': {e}"
+                )
+
+        return tasks
+
 
 
 def signal_handler(sig, frame):

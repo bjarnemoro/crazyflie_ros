@@ -38,8 +38,6 @@ def generate_launch_description():
         name='manager_node',
         output='screen',
         parameters=[
-            {'robot_prefix': '/crazyflie'},
-            {'use_sim_time': True},
             config
         ]
     )
@@ -49,8 +47,6 @@ def generate_launch_description():
             executable='agentMPC',
             output='screen',
             parameters=[
-                {'robot_prefix': '/crazyflie'},
-                {'use_sim_time': True},
                 config
             ]
         )
@@ -61,8 +57,6 @@ def generate_launch_description():
         name='barrier_service',
         output='screen',
         parameters=[
-            {'robot_prefix': '/barrier_service'},
-            {'use_sim_time': True},
             config
         ]
     )

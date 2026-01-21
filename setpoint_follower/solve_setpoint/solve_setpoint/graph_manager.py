@@ -4,6 +4,7 @@ from collections import defaultdict
 
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped
+import rclpy.logging
 
 #from barrier_msg.msg import Config
 
@@ -23,8 +24,8 @@ class GraphManager:
 
     def calc_edges(self):
         edges = []
-        for i in range(len(self.__agent_pos)):
-            for j in range(i+1, len(self.__agent_pos)):
+        for i in range(self.NUM_AGENTS):
+            for j in range(i+1, self.NUM_AGENTS):
                 if np.abs(np.linalg.norm(self.__agent_pos[i]-self.__agent_pos[j])) < self.COMM_DISTANCE:
                     edges.append((i,j))
 

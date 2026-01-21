@@ -120,9 +120,9 @@ class MPCsolver:
 
             if return_val == "pos":
                 return self.x.value[:self.state_size].T
-            if return_val == "x0":
+            if return_val == "x_next":
                 return self.x.value[:,1]
-            elif return_val == "input":
+            elif return_val == "u0":
                 return self.u.value[:,0]
 
 
