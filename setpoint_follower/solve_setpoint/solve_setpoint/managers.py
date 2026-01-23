@@ -16,8 +16,8 @@ from barrier_msg.msg import BMsg, TMsg, BMsglist
 from solve_setpoint.bMsg import bMsg, HyperCubeHandler
 from solve_setpoint.graph_manager import GraphManager
 from solve_setpoint.task_manager import TaskManager, Task
-from solve_setpoint.solvers.combined_solve import solve_combined
-from solve_setpoint.utils import WorkingMode, AgentState, ManagerState
+from solve_setpoint.solvers.combined_solve import solve_task_decomposition
+from solve_setpoint.utils import WorkingMode, AgentState, ManagerState, AnsiColor
 
 
 class Manager(Node):
@@ -52,18 +52,18 @@ class Manager(Node):
         self.BOX_WEIGHT = self.get_parameter("BOX_WEIGHT").value
 
 
+        ##
+        self.start_time = None
 
         #setup the tasks that are to be done
-        self.tasks = self._load_tasks()
+        self.tasks, self.periods = self._load_tasks()
         self.get_logger().info(f"Loaded {len(self.tasks)} tasks")
-
-        
 
         #setup the graph manager and task manager
         self.graph_manager = GraphManager(self.NUM_AGENTS, self.COMM_DISTANCE)
-        self.task_manager = TaskManager(self.DIM, self.COMM_DISTANCE, self.tasks)
+        self.task_manager = TaskManager(self.DIM, self.COMM_DISTANCE, self.periods, self.tasks)
 
-        self.recalc_times = self.task_manager.recalculate_at()
+        self.recalc_times    = self.task_manager.recalculate_at()
         self.triggered_times = set()
 
         #setup all the subscribers and publishers
@@ -99,7 +99,7 @@ class Manager(Node):
         odom_name = {WorkingMode.SIM: "/odom", WorkingMode.REAL: "/pose"}
         odom_type = {WorkingMode.SIM: Odometry, WorkingMode.REAL: PoseStamped}
 
-        for i, drone in enumerate(self.drones):
+        for i,drone in enumerate(self.drones):
             callback = lambda msg, idx=i: self.graph_manager.set_pos_callback(msg, idx, self.get_logger().info)
             self.odom_subscribers.append(self.create_subscription(
                 odom_type[self.SYSTEM], drone + odom_name[self.SYSTEM], callback, 10))
@@ -115,7 +115,7 @@ class Manager(Node):
         modes      = {0: "simulation", 1: "real"}
         self.get_logger().info(f"Working in {self.SYSTEM.name} mode. Manager state {self.manager_state.name} !!")
 
-    def send_barrier(self, future):
+    def on_new_barrier(self, future):
         try:
             self.msgs = []
             response = future.result()
@@ -143,120 +143,122 @@ class Manager(Node):
         else:
             self.get_logger().info("Error: Unknown Agent State.")
 
-    def graph_rviz(self, time_recalc):
-        edge_recalc = self.graph_manager.calc_edges() 
+    def is_rviz_node_connected(self):
+        return self.edge_publisher.get_subscription_count() > 0 and self.task_publisher.get_subscription_count() > 0
 
-        #publish edge data for the graph_rviz script if active
-        if edge_recalc and self.edge_publisher.get_subscription_count() > 0:
+    def update_and_publish_communication_graph(self):
+        
+        #process the edges now that every agent is online
+        self.graph_manager.compute_current_communication_edges()
+        changed = self.graph_manager.did_graph_change()
+        if changed:
+            self.graph_manager.update() # update to the currently computed edges
+
+        if self.is_rviz_node_connected():
             msg = Int32MultiArray()
             msg.data = [i for pair in self.graph_manager.get_edge() for i in pair]
-            self.edge_publisher.publish(msg)
+            self.edge_publisher.publish(msg) # publish for rviz
+        return changed
 
+    def update_and_publish_task_graph(self, current_time, communication_graph_changed ):
+
+        # Check if it is time for the recalulcation     
+        if len(self.recalc_times) == 0:
+            return    
+        
+        if current_time >= self.recalc_times[0] or communication_graph_changed:
+            time_recalc = True
+            self.recalc_times.pop(0)
+            
+            self.get_logger().info(f"{AnsiColor.CYAN} Recaculating task : Communication graph changed: {communication_graph_changed}, time for recalculation: {time_recalc}, current time: {current_time}, next recalculation at: {self.recalc_times[0] if len(self.recalc_times) else 'N/A'} {AnsiColor.RESET}")
+
+            # measure time it takes to compute the tasks
+
+            start = self.get_clock().now()
+
+            #calculate the current relative tasks based on the current weighted communication graph
+            comm_graph = self.graph_manager.get_comm_graph()
+            comm_edges = self.graph_manager.get_edge()
+            self.get_logger().info(f"Current communication edges: {comm_edges}")
+
+            start = self.get_clock().now()
+            tasks, task_paths, is_feasible = self.task_manager.obtain_current_tasks(current_time, comm_edges, self.get_logger().info)
+            end     = self.get_clock().now()
+            elapsed = (end - start).nanoseconds / 1e9
+                
+            #TODO: In case task is not feasible retrun the minimum violating solution
+            self.get_logger().info("Decomposition paths for the current tasks:{}".format(task_paths))
+            cvx_status, new_tasks = solve_task_decomposition(tasks, task_paths,self.BOX_WEIGHT, self.COMM_DISTANCE, self.get_logger())
+            if cvx_status == "optimal" : 
+                #compute the barrier function
+                self.get_logger().info(f"{AnsiColor.GREEN}All tasks can be decomposed successfully!{AnsiColor.RESET}")
+                
+                self.req = BCompSrv.Request()
+                tmsg_list = []
+                for task in new_tasks:
+                    tmsg_list.append(self.task_manager.get_tmsg(task))
+                    # print task 
+                    self.get_logger().info(f"task edges: {task.edges}, rel_pos: {task.rel_position}, size: {task.size}")
+
+                self.req.messages.extend(tmsg_list)
+                
+                future = self.barrier_client.call_async(self.req)
+                future.add_done_callback(self.on_new_barrier)
+                
+                self.get_logger().info(f"{future}")
+            else:
+                self.get_logger().error("The task decompositon failed!. Solver returned status: {}".format(cvx_status))
+        
+        
+       
         #publish task data for the graph_rviz script if active
-        if time_recalc and self.task_publisher.get_subscription_count() > 0:
-            tasks = self.task_manager.get_tasks(self.total_elapsed)
+        # if self.is_rviz_node_connected():
+        #     tasks = self.task_manager.get_tasks(self.total_elapsed)
 
-            msg = TaskEdgeList()
-            for task in tasks:
-                task_edge = TaskEdge()
-                task_edge.start_idx = task[0][0]
-                task_edge.end_idx = task[0][1]
-                task_edge.agent_x = float(task[1][0])
-                task_edge.agent_y = float(task[1][1])
-                if self.DIM==2:
-                    task_edge.agent_z = 0.
-                else:
-                    task_edge.agent_z = float(task[1][2])
+        #     msg = TaskEdgeList()
+        #     for task in tasks:
+        #         task_edge = TaskEdge()
+        #         task_edge.start_idx = task[0][0]
+        #         task_edge.end_idx = task[0][1]
+        #         task_edge.agent_x = float(task[1][0])
+        #         task_edge.agent_y = float(task[1][1])
+        #         if self.DIM==2:
+        #             task_edge.agent_z = 0.
+        #         else:
+        #             task_edge.agent_z = float(task[1][2])
 
-                msg.task_list.append(task_edge)
+        #         msg.task_list.append(task_edge)
 
-            self.task_publisher.publish(msg)
+        #     self.task_publisher.publish(msg)
 
 
     def mainloop(self):
+        
         if self.manager_state == ManagerState.WAITING_FOR_ODOMETRY:
             #check whether all drones have published their odometry
-            if np.all(self.graph_manager.online_status):
+            if self.graph_manager.are_all_agents_online():
                 #change state
-                self.get_logger().info(f"Received odom message from all agents, changing manager state to: {ManagerState.READY.name}")
+                self.get_logger().info(f"{AnsiColor.GREEN}Received odom message from all agents, changing manager state to: {ManagerState.READY.name} {AnsiColor.RESET}")
                 self.manager_state = ManagerState.READY
 
-                #process the edges now that every agent is online
-                self.graph_manager.calc_edges()
-                if self.edge_publisher.get_subscription_count() > 0:
-                    msg = Int32MultiArray()
-                    msg.data = [i for pair in self.graph_manager.get_edge() for i in pair]
-                    self.edge_publisher.publish(msg)
-
-                #set the starting time
-                self.start_time = self.get_clock().now().nanoseconds/1e9
-                self.prev_time = self.start_time
-
+                #publish the initial communication graph
+                self.update_and_publish_communication_graph()
+            
             else:
-                self.counter += 1
-                if self.counter == 50:
-                    self.get_logger().info("Not all agents online yet")
-                    self.counter = 0
+                missing_agents =  self.graph_manager.offline_agents()
+                self.get_logger().info(f"Waiting for odom messages from agents: {missing_agents}")
 
         elif self.manager_state == ManagerState.READY and self.agent_state == AgentState.READY:
+            self.get_logger().info(f"Ready to starting the mission!")
             
-            self.current_time  = self.get_clock().now().nanoseconds/1e9
-            self.delta_time    = self.current_time - self.prev_time
-            self.total_elapsed = self.current_time - self.start_time
-            self.prev_time     = self.current_time
-
-            time_recalc = False
-            for t in self.recalc_times:
-                if t not in self.triggered_times and self.total_elapsed >= t:
-                    self.triggered_times.add(t)
-                    time_recalc = True
-
-            #returns whether the edges have changed
-            # self.graph_rviz(time_recalc)
-
-            #-------------------------------
-            #    Main optimization logic
-            #-------------------------------
-            if time_recalc:# or edge_recalc:
-                self.get_logger().info("Recaculating at: {}".format(self.total_elapsed))
-
-                #calculate the current relative tasks based on the current weighted communication graph
-                comm_graph = self.graph_manager.get_comm_graph()
-                weights = self.graph_manager.get_weights()
-                
-                #task_paths, task_pos, task_box = self.task_manager.obtain_current_tasks(
-                #    self.total_elapsed, comm_graph, weights)
-                edges = self.graph_manager.get_edge()
-
-                
-                task_paths, task_pos, task_box = self.task_manager.obtain_current_tasks2(
-                    self.total_elapsed, edges, self.get_logger().info)
-
-                if task_paths and "impossible" not in task_paths: #only perform if not empty, and valid paths
-                    agents = self.graph_manager.get_pos()
-                    return_mode = "relative"
-
-                    if self.DIM == 2:
-                        agents = agents[:,:2]
-
-                    self.get_logger().info(f"{task_paths}")
-
-                    succes, pos_result, box_result = solve_combined(
-                        task_paths, task_pos, task_box, return_mode, self.BOX_WEIGHT, self.COMM_DISTANCE)
-
-                    if succes: 
-                        #compute the barrier function
-                        self.req = BCompSrv.Request()
-                        tmsg_list = self.task_manager.get_tmsg(self.total_elapsed, pos_result, box_result)
-                        self.req.messages.extend(tmsg_list)
-                        future = self.barrier_client.call_async(self.req)
-                        future.add_done_callback(self.send_barrier)
-                        self.get_logger().info(f"{future}")
-                    else:
-                        self.get_logger().info("The optimization failed")
-                else:
-                    if "impossible" in task_paths:
-                        self.get_logger().info("No valid communication graph at this time")
+            if self.start_time is None: # time is considered since the start of the mission
+                self.start_time = self.get_clock().now()
+            
+            current_time = self.get_clock().now() - self.start_time
+            current_time = current_time.nanoseconds / 1e9
+            
+            comm_graph_changed = self.update_and_publish_communication_graph()
+            self.update_and_publish_task_graph(current_time,comm_graph_changed)
 
     def _load_tasks(self):
         """
@@ -264,15 +266,16 @@ class Manager(Node):
         taken from https://gist.github.com/agrueneberg/d76fff493753fa531f1b5d33be0f07ed
         """
 
-        params = self.get_parameters_by_prefix('TASKS')
+        params_task = self.get_parameters_by_prefix('TASKS')    # e.g., {"task_3.timespan":[1,2],"task_3.rel_position":[1,2], "task_2.rel_position"...}
+        params_period = self.get_parameters_by_prefix('PERIODS')# e.g., {"period_1":[1,2],"period_2":[1,2], ...}
 
-        if not params:
+        if not params_task:
             self.get_logger().warn("No TASKS parameters found")
             return []
 
         tasks_by_name = {}
 
-        for full_key, param in params.items():
+        for full_key, param in params_task.items():
             # Example: "task_3.timespan"
             task_name, field = full_key.split(".", 1)
 
@@ -281,17 +284,51 @@ class Manager(Node):
             self.get_logger().info(
                 f"Loaded param: {task_name}.{field} = {param.value}"
             )
+        
+        periods = []
+        
+        for full_key, param in params_period.items():
+            # Example: "period_1" -> period are assumed to be given in order
+            _, num = full_key.split("_", 1)
+            num = int(num)
+            periods.append(param.value)
+
+            self.get_logger().info(
+                f"Loaded period: {num} = {param.value}"
+            )
 
         tasks = []
         for name, data in tasks_by_name.items():
+            # Replace period indices with actual period values
+
             try:
-                tasks.append(Task(**data))
+                tasks.append(Task(
+                    timespan    = periods[data['period_num']],
+                    edges       = data['edges'],
+                    rel_position= data['rel_position'],
+                    size        = data['size'],
+                    period_num  = data['period_num']
+                ))
             except Exception as e:
                 self.get_logger().error(
                     f"Failed to create Task '{name}': {e}"
                 )
 
-        return tasks
+        # check phase : make sure periods are ordered and not overlapping
+        for num, period in enumerate(periods):
+            for other_num, other_period in enumerate(periods):
+                if num < other_num:
+                    if not (period[1] <= other_period[0]):
+                        self.get_logger().error(
+                            f"Periods {num} and {other_num} are overlapping or are unordred. PLease make sure the period are orderd in ascending order: {period} and {other_period}. Please provide "
+                        )
+        self.get_logger().info('\033[32m'+ f" All tasks loaded successfully !" + '\033[0m')
+        return tasks, periods
+
+    def wait_for_time(self):
+        while self.get_clock().now().nanoseconds == 0:
+            self.get_logger().info("Waiting for valid ROS time...")
+            rclpy.spin_once(self, timeout_sec=0.1)
 
 
 

@@ -73,21 +73,68 @@ def delete_strip(time, marker_id):
 
     return marker
 
+def text_marker(time, marker_id, pos, agent_id, color):
+    marker = Marker()
+    marker.header.frame_id = "world"
+    marker.header.stamp = time
+    marker.ns = "text"
+    marker.id = marker_id
+    marker.type = Marker.TEXT_VIEW_FACING
+    marker.action = Marker.ADD
+
+    marker.pose.position.x = pos[0]
+    marker.pose.position.y = pos[1]
+    marker.pose.position.z = pos[2]
+    marker.pose.orientation.x = 0.0
+    marker.pose.orientation.y = 0.0
+    marker.pose.orientation.z = 0.0
+    marker.pose.orientation.w = 1.0
+
+    marker.scale.z = 0.2  # Text height
+
+    marker.color.r = color[0]
+    marker.color.g = color[1]
+    marker.color.b = color[2]
+    marker.color.a = 1.0
+
+    marker.text = "CF{}".format(agent_id)
+
+    return marker
+
 class GraphMarkerPublisher(Node):
     def __init__(self):
         super().__init__('graph_marker_publisher')
+
+        self.declare_parameter('robot_prefix', '/crazyflie')
+        self.declare_parameter("SYSTEM", 2)
+        self.declare_parameter("DIM", 10)
+        self.declare_parameter("NUM_AGENTS", 10)
+        self.declare_parameter("SPEED", 0.4)
+        self.declare_parameter("AGENT_TIMER", 0.1)
+        self.declare_parameter("HOOVERING_HEIGHT",1.0)
+
+        self.robot_prefix = self.get_parameter('robot_prefix').value
+        self.SYSTEM = self.get_parameter("SYSTEM").value
+        self.DIM = self.get_parameter("DIM").value
+        self.SPEED = self.get_parameter("SPEED").value
+        self.NUM_AGENTS = self.get_parameter("NUM_AGENTS").value
+        self.AGENT_TIMER = self.get_parameter("AGENT_TIMER").value
+        self.HOOVERING_HEIGHT = self.get_parameter("HOOVERING_HEIGHT").value
+
         self.publisher = self.create_publisher(MarkerArray, 'visualization_marker', 10)
         self.task_publisher = self.create_publisher(MarkerArray, 'task_visualization_marker', 10)
         self.timer = self.create_timer(0.1, self.timer_callback)
 
-        self.drones = ['/crazyflie{}'.format(i) for i in range(1,11)]
+        
+
+        self.drones = ['/crazyflie{}'.format(i) for i in range(1,self.NUM_AGENTS+1)]
         self.odom_subscribers = []
         for i, drone in enumerate(self.drones):
             callback = lambda msg, idx=i: self.pos_callback(msg, idx)
             self.odom_subscribers.append(self.create_subscription(
                 Odometry, drone + '/odom', callback, 10))
 
-        self.drone_pos = np.zeros((10, 3))
+        self.drone_pos = np.zeros((self.NUM_AGENTS, 3))
         self.edges = []
         self.task_edges = []
         self.prev_marker_count = 0
@@ -104,8 +151,8 @@ class GraphMarkerPublisher(Node):
         for i in range(max(len(self.edges), self.prev_edge_count)):
             if marker_id < len(self.edges):
                 time = self.get_clock().now().to_msg()
-                pos1 = self.drone_pos[self.edges[i][0]]
-                pos2 = self.drone_pos[self.edges[i][1]]
+                pos1 = self.drone_pos[self.edges[i][0]-1] # -1 for 0-based indexing
+                pos2 = self.drone_pos[self.edges[i][1]-1] # -1 for 0-based indexing
                 color = [1.0, 0.0, 0.0]
                 marker = line_strip(time, marker_id, pos1, pos2, color)
 
@@ -151,6 +198,15 @@ class GraphMarkerPublisher(Node):
 
                     marker_array.markers.append(marker)
                     marker_id += 1
+
+        ## add marker for each agent 
+        for i in range(self.NUM_AGENTS):
+            time = self.get_clock().now().to_msg()
+            pos = self.drone_pos[i] + np.array([0.0, 0.0, 0.2])
+            color = [0.0, 0.0, 1.0]
+            marker = text_marker(time, marker_id, pos, i+1, color)
+            marker_array.markers.append(marker)
+            marker_id += 1
 
         self.task_publisher.publish(marker_array)
         self.prev_marker_count = len(self.task_edges)

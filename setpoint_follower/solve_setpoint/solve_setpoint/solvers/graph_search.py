@@ -21,14 +21,12 @@ class Task:
         self.edge   = edge    # (u,v) edge where the task is located
 
 
-
-
-def build_graph(edges : list[tuple[int,int]], task_list: list[Task] = []) -> dict[dict]:
+def build_graph(comm_edges : list[tuple[int,int]], task_list: list[Task] = []) -> dict[dict]:
     """
     Use this to build a simple communication graph
     """
     graph = dict()
-    for u, v in edges:
+    for u, v in comm_edges:
         graph.setdefault(u, dict())[v] = 1 # counts the number of tasks passing through this edge
         graph.setdefault(v, dict())[u] = 1
 
@@ -44,26 +42,33 @@ def build_graph(edges : list[tuple[int,int]], task_list: list[Task] = []) -> dic
     return graph
 
 
-def select_communication_inconsistent_tasks(graph, task_list: list[Task], comm_dist, log) -> list[Task]:
+def select_communication_inconsistent_tasks(comm_graph : dict[dict,int], task_list: list[Task], comm_dist, log) -> list[Task]:
     """
     Select tasks that are inconsistent with the communication graph.
     """
     inconsistent_tasks = []
+    consistent_tasks   = []
+    
     for task in task_list:
         u, v = task.edges
-        if v not in graph[u]: # check if the task has an edge in the communication graph
+        if v not in comm_graph[u]: # check if the task has an edge in the communication graph
             inconsistent_tasks.append(task)
-        else:
-            log(f"{np.linalg.norm(task.rel_position)}")
-            if np.linalg.norm(task.rel_position) > comm_dist:
-                inconsistent_tasks.append(task)
-                log(f"added")
 
-    return inconsistent_tasks
+        elif np.linalg.norm(task.rel_position) > comm_dist: # a task is inconsistent also if it requires a relative configuration that spans a bigger distance than the communication radius
+            inconsistent_tasks.append(task)
+            log(f"added")
+        else:
+            consistent_tasks.append(task)
+
+    return inconsistent_tasks, consistent_tasks
 
 
 
 def all_paths(graph, start, end, path=None, cost=None):
+    """
+    Returns all the paths from start to end in the given graph along with their costs.
+    The paths are given as a list of lists, and the costs as a list of integers.
+    """
 
     if path is None and cost is None:
         path = []
@@ -248,12 +253,13 @@ def animate_graph_updates(graph, kt_list, pos=None, interval=1500):
 class DecompositionTrial:
     def __init__(self, permutation_of_tasks: list[Task], 
                        paths_dict          : dict[Task, tuple[Path,float]],                       
-                       will_be_feasible    : bool):
+                       will_be_feasible    : bool,
+                       total_cost          : float):
         
         self.permutation_of_tasks = permutation_of_tasks   # gives the original permutation of tasks that created this decomposition (we will need it just for visualization)
         self.paths_dict           = paths_dict             # for each task it contains (path, cost)
         self.will_be_feasible     = will_be_feasible       # if in the current communicaiton graph there is at least one task can not be bridged due to insufficient number of agents, then this is marked as unfeasible
-
+        self.total_cost           = total_cost
 
 
 def decomposition_path_guesses(inconsistent_tasks : list[Task], graph : dict[dict], communication_radious : float) -> list[DecompositionTrial]:
@@ -288,10 +294,11 @@ def decomposition_path_guesses(inconsistent_tasks : list[Task], graph : dict[dic
     # We will give the following output 
     list_of_decompositions = []
 
-    for task_list_permutation in permutations:
+    for task_list_permutation in permutations: # all permuations in which tasks can be decomposed
         copied_graph = {k: v.copy() for k, v in graph.items()}
-        paths_dict   = dict()
+        paths_dict   = {}
         is_feasible  = True
+        total_cost   = 0
         
 
         for task in task_list_permutation:
@@ -301,20 +308,21 @@ def decomposition_path_guesses(inconsistent_tasks : list[Task], graph : dict[dic
 
             # define minimum path length for this task
             center = np.array(task.rel_position)
-            min_length = np.ceil(np.linalg.norm(center)/communication_radious)
+            min_length = np.ceil(np.linalg.norm(center)/(communication_radious/2))
             if max(lengths) < min_length: # there is no path that is sufficiently long to bridge this task. The take the longest you can
                 chosen_path = paths[np.argmax(lengths)]
                 chosen_cost = costs[np.argmax(lengths)]
-                paths_dict[task.ID] = (chosen_path, chosen_cost)
+                paths_dict[task.ID] = chosen_path
                 is_feasible =   False # this task will render the whole task decomposition infeasible
+                total_cost += chosen_cost
             
             else : # select the paths that are sufficiently long and then take the one of minimum cost
                 valid_paths = [path for path, length in zip(paths, lengths) if length >= min_length]
                 if valid_paths:
                     chosen_path      = valid_paths[np.argmin([costs[paths.index(p)] for p in valid_paths])]
                     chosen_cost      = costs[paths.index(chosen_path)]
-                    paths_dict[task.ID] = (chosen_path, chosen_cost)
-
+                    paths_dict[task.ID] = chosen_path
+                    total_cost += chosen_cost
 
             # add weight to the graph for this selection so that then other paths are selected based on this selection
             add_weight_to_path(copied_graph, chosen_path)
@@ -322,7 +330,8 @@ def decomposition_path_guesses(inconsistent_tasks : list[Task], graph : dict[dic
         # Decomposition
         decomposition_trial = DecompositionTrial(permutation_of_tasks= task_list_permutation, 
                                                  paths_dict          = paths_dict, 
-                                                 will_be_feasible    = is_feasible)
+                                                 will_be_feasible    = is_feasible,
+                                                 total_cost          = total_cost)
 
         list_of_decompositions.append(decomposition_trial)
 

@@ -6,34 +6,53 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped
 import rclpy.logging
 
-#from barrier_msg.msg import Config
-
 class GraphManager:
-    #check if all agents are receiving there position
+    """"
+    The graph manager takes care of storing the current position for all the agents by index.
+    What it does it is
+
+    1) compute the edges of the current communication graph based on the positions and communication distance
+    2) provide a position callback to update the state of each agent by messages from the simulator/real world crazyflie
+
     
+    """
 
     def __init__(self, num_agents, comm_distance):
         self.NUM_AGENTS = num_agents
         self.COMM_DISTANCE = comm_distance
 
-        self.__agent_pos = np.zeros((self.NUM_AGENTS, 3))
-        self.__comm_edges = None
-        self.__comm_graph = None
+        self.__agent_pos                                = np.zeros((self.NUM_AGENTS, 3))
+        self.__comm_edges         :list[tuple(int,int)] = None
+        self.__comm_graph         :dict[int,int]        = None
+        self.__current_comm_edges :list[tuple(int,int)] = None
 
         self.online_status = np.zeros(self.NUM_AGENTS)
 
-    def calc_edges(self):
+    def compute_current_communication_edges(self):
         edges = []
-        for i in range(self.NUM_AGENTS):
-            for j in range(i+1, self.NUM_AGENTS):
-                if np.abs(np.linalg.norm(self.__agent_pos[i]-self.__agent_pos[j])) < self.COMM_DISTANCE:
+        for i in range(1,self.NUM_AGENTS +1):
+            for j in range(i+1, self.NUM_AGENTS +1):
+                if np.abs(np.linalg.norm(self.__agent_pos[i-1]-self.__agent_pos[j-1])) < self.COMM_DISTANCE:
                     edges.append((i,j))
+        self.__current_comm_edges = edges
+        if self.__comm_edges is None:
+            self.__comm_edges = deepcopy(self.__current_comm_edges)
+    
+    def did_graph_change(self):
+        for edge in self.__current_comm_edges:
+            if edge not in self.__comm_edges:
+                return True
+        return False
+    
+    def update(self):
+        
+        self.__comm_edges = self.__current_comm_edges
+        self.__comm_graph = defaultdict(list)
 
-        if edges != self.__comm_edges:
-            self.__set_edges(edges)
-            return True
-        else:
-            return False
+        for edge in self.__comm_edges:
+            # create undirected graph. Append to each other neighbours
+            self.__comm_graph[edge[0]].append(edge[1])
+            self.__comm_graph[edge[1]].append(edge[0])
 
     def set_pos_callback(self, msg, idx, log):
         """set the position of an agent by index"""
@@ -51,15 +70,6 @@ class GraphManager:
             self.__agent_pos[idx][1] = msg.pose.position.y
             self.__agent_pos[idx][2] = msg.pose.position.z
 
-    def get_weights(self):
-        weights = {}
-
-        for edge in self.__comm_edges:
-            weights[tuple(edge)] = np.abs(np.linalg.norm(self.__agent_pos[edge[0]] - self.__agent_pos[edge[1]]))
-            weights[(edge[1], edge[0])] = np.abs(np.linalg.norm(self.__agent_pos[edge[0]] - self.__agent_pos[edge[1]]))
-
-        return weights
-
     def get_pos(self):
         return self.__agent_pos
 
@@ -69,10 +79,8 @@ class GraphManager:
     def get_edge(self):
         return self.__comm_edges
 
-    def __set_edges(self, edges):
-        self.__comm_edges = edges
-        self.__comm_graph = defaultdict(list)
-
-        for edge in self.__comm_edges:
-            self.__comm_graph[edge[0]].append(edge[1])
-            self.__comm_graph[edge[1]].append(edge[0])
+    def are_all_agents_online(self):
+        return np.all(self.online_status)
+        
+    def offline_agents(self):
+        return np.where(self.online_status==0)[0] + 1 # added plus 1 (agent 1 corresponds to index 0)

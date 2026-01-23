@@ -103,7 +103,7 @@ class MPC_agents(Node):
         self.active = False
         self.is_set = False
         self.called_takeoff = False
-        self.time_to_take_off = 2
+        self.time_to_take_off = 5
 
         self.start_set = False
         self.start_pos = np.zeros((3, self.NUM_AGENTS))
@@ -190,7 +190,7 @@ class MPC_agents(Node):
             if self.SYSTEM == WorkingMode.SIM:
                 for idx, publisher in enumerate(self.twist_publishers):
                     msg = Twist()
-                    msg.linear.z = np.clip((self.HOOVERING_HEIGHT - self.pos[idx, 2]), -self.Z_SPEED, self.Z_SPEED) # go to one meter altitude
+                    msg.linear.z = np.clip((self.HOOVERING_HEIGHT + 0.1*idx - self.pos[idx, 2]), -self.Z_SPEED, self.Z_SPEED) # go to one meter altitude
                     publisher.publish(msg)
             if self.SYSTEM == WorkingMode.REAL:
                 if not self.called_takeoff:
@@ -206,7 +206,6 @@ class MPC_agents(Node):
         
 
         elif self.state == AgentState.READY:
-            self.get_logger().info('Running MPC controller')
             if self.DIM == 2:
                 x0 = self.pos[:,:2].flatten()
             elif self.DIM == 3:
@@ -225,7 +224,7 @@ class MPC_agents(Node):
                     msg = Twist()
                     msg.linear.x = u[self.DIM*idx+0]
                     msg.linear.y = u[self.DIM*idx+1]
-                    msg.linear.z = np.clip(self.HOOVERING_HEIGHT - self.pos[idx, 2], -self.Z_SPEED, self.Z_SPEED)
+                    msg.linear.z = np.clip(self.HOOVERING_HEIGHT + idx*0.1 - self.pos[idx, 2], -self.Z_SPEED, self.Z_SPEED)
                     msg.angular.z = np.clip(0. - self.angles[idx, 2], -self.SPEED, self.SPEED)
                     publisher.publish(msg)
             if self.SYSTEM == WorkingMode.REAL:

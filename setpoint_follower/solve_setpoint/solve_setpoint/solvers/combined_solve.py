@@ -1,172 +1,186 @@
 import cvxpy as cp
 import numpy as np
 import matplotlib.pyplot as plt
+from collections import defaultdict
+import copy
 
-def flatten(i):
-    return [k for j in i for k in j]
 
-def used_agent(task_paths):
-    used_agents = []
-    for task_path in task_paths:
-        for vals in task_path:
-            for i in range(2):
-                if vals[i] not in used_agents:
-                    used_agents.append(vals[i])
-
-    return used_agents
+def get_H_and_b(box_dim):
     
-def task_vars(task_paths, used_agents) -> np.ndarray | np.ndarray:
-    tot_path_length = len(flatten(task_paths)) #flatten the task path array
+    H = np.vstack((np.eye(box_dim),-np.eye(box_dim)))
+    b = np.ones(2*box_dim) * 0.5
+    return H,b
+      
 
-    A = np.zeros((tot_path_length, len(used_agents)))
-    B = np.zeros((len(task_paths), len(used_agents)))
-
-    counter = 0
-    for i, task_path in enumerate(task_paths):
-        #fill the A matrix with all agents along a path
-        for edge in task_path:
-            l = len(task_path)
-            idx1 = used_agents.index(edge[0])
-            idx2 = used_agents.index(edge[1])
-            A[counter][idx1] = -1
-            A[counter][idx2] = +1
-            counter += 1
-
-        #fill B matrix with first and final agent of a task
-        B[i][used_agents.index(task_path[0][0])] = -1
-        B[i][used_agents.index(task_path[-1][1])] = +1
-
-    return A, B
-
-def box_vars(task_paths, task_box) -> np.ndarray:
-    unique_path, indices = np.unique(flatten(task_paths), return_index=True, axis=0)
-
-    idx_path = []
-    for i in range(len(task_paths)):
-        idx_path.append([np.where(np.all(unique_path==edge,axis=1))[0][0] for edge in task_paths[i]])
-
-    tasks_selector = np.zeros((len(task_box), len(indices)))
-    for i, path in enumerate(idx_path):
-        for idx in path:
-            tasks_selector[i][idx] = 1
-
-    return tasks_selector, indices
-
-def vertices(bbox, box_dim):
-    if box_dim == 4:
-        v1 = cp.hstack([bbox[:,0:1], bbox[:,2:3]])
-        v2 = cp.hstack([bbox[:,0:1], -bbox[:,3:4]])
-        v3 = cp.hstack([-bbox[:,1:2], bbox[:,2:3]])
-        v4 = cp.hstack([-bbox[:,1:2], -bbox[:,3:4]])
-        bbox_vertices = cp.vstack([v1, v2, v3, v4])
-
-    elif box_dim == 6:
-        v1 = cp.hstack([bbox[:,0:1], bbox[:,2:3], bbox[:,4:5]])
-        v2 = cp.hstack([bbox[:,0:1], -bbox[:,3:4], bbox[:,4:5]])
-        v3 = cp.hstack([-bbox[:,1:2], bbox[:,2:3], bbox[:,4:5]])
-        v4 = cp.hstack([-bbox[:,1:2], -bbox[:,3:4], bbox[:,4:5]])
-        v5 = cp.hstack([bbox[:,0:1], bbox[:,2:3], -bbox[:,5:6]])
-        v6 = cp.hstack([bbox[:,0:1], -bbox[:,3:4], -bbox[:,5:6]])
-        v7 = cp.hstack([-bbox[:,1:2], bbox[:,2:3], -bbox[:,5:6]])
-        v8 = cp.hstack([-bbox[:,1:2], -bbox[:,3:4], -bbox[:,5:6]])
-        bbox_vertices = cp.vstack([v1, v2, v3, v4, v5, v6, v7, v8])
-
-    return bbox_vertices
-
-
-def solve_combined(task_paths: np.ndarray, task_pos: np.ndarray, task_box: np.ndarray, return_mode: str, BOX_WEIGHT, COMM_DISTANCE) -> bool:
+def vertices(dim):
     """
-    
+    Returns all vertices of a hypercube centered at zero
+    with side length 1, for dimension 2 or 3.
     """
-    assert len(task_paths[0][0]) == 2, "make sure your task path is a list of a path of edges"
-    assert len(task_paths) == len(task_pos)
-    assert len(task_pos) == len(task_box)
-    assert len(task_box[0]) == 2*len(task_pos[0]) #box and position have same dimension (2d / 3d)
+    if dim == 2:
+        return [
+            np.array([-0.5, -0.5]),
+            np.array([-0.5,  0.5]),
+            np.array([ 0.5, -0.5]),
+            np.array([ 0.5,  0.5]),
+        ]
 
-    
-    if type(task_pos) != np.ndarray:
-        task_pos = np.array(task_pos)
+    elif dim == 3:
+        return [
+            np.array([-0.5, -0.5, -0.5]),
+            np.array([-0.5, -0.5,  0.5]),
+            np.array([-0.5,  0.5, -0.5]),
+            np.array([-0.5,  0.5,  0.5]),
+            np.array([ 0.5, -0.5, -0.5]),
+            np.array([ 0.5, -0.5,  0.5]),
+            np.array([ 0.5,  0.5, -0.5]),
+            np.array([ 0.5,  0.5,  0.5]),
+        ]
 
-    if type(task_box) != np.ndarray:
-        task_box = np.array(task_box)
+    else:
+        raise ValueError("Dimension must be 2 or 3")
+
+
+class SimpleGraph:
+    def __init__(self, tasks, task_paths):
+
+        self.edges = defaultdict(lambda: defaultdict(list))
+        self.edge_list = []
+
+        edge_vars  = {} # disctionaty of task and related edge variables
+        scale_vars = {}
+        for task, path in zip(tasks, task_paths):
+            edge_vars[task] = [cp.Variable(len(task.rel_position)) for edge in path]
+            scale_vars[task] = [cp.Variable() for edge in path]
+
+        for task, path in zip(tasks, task_paths):
+            for jj,edge in enumerate(path):
+                u,v            = edge
+                directed_edge = (u,v) # it is important to give the same direction to the edge
+
+                if not len(self.edges[u][v]): # only add the task once
+                    self.edges[u][v] = [edge_vars[task][jj], scale_vars[task][jj], directed_edge]
+                    self.edges[v][u] = [edge_vars[task][jj], scale_vars[task][jj], directed_edge]
+                    self.edge_list.append(directed_edge)
+
+    def find_all_cycles(self):
+        """
+        Finds all simple cycles in the graph.
+        Only the start/end node may repeat.
+        Returns a list of cycles (node lists).
+        """
+        cycles = []
+
+        def dfs(start, current, path):
+            for neighbor in self.edges[current]:
+                if neighbor == start and len(path) > 2:
+                    cycles.append(path + [start])
+                elif neighbor not in path:
+                    dfs(start, neighbor, path + [neighbor])
+
+        for node in self.edges:
+            dfs(node, node, [node])
+
+        return cycles
+            
+def solve_task_decomposition(tasks , task_paths: list[tuple[int,int]], BOX_WEIGHT, COMM_DISTANCE, logger) -> bool:
 
     #create a list with a unique index of all agents that are used
-    used_agents = used_agent(task_paths)
-
-    #----------------------------------------
-    #    obtain the main selector matrices
-    #----------------------------------------
-    rel_task_pos_select, abs_task_pos_select = task_vars(task_paths, used_agents)
-    tasks_selector, rel_indices = box_vars(task_paths, task_box)
-
+    dim           = len(tasks[0].rel_position)
+    H,b           = get_H_and_b(box_dim= dim)
+    vertices_list = vertices(dim)
     
-    #-------------------------------------------
-    #    Variables for position optimization
-    #-------------------------------------------
+    graph         = SimpleGraph(tasks, task_paths)
+  
+    # close the loop with every task 
+    constraints = []
+    logger.info(f"{task_paths}")
+    for task, path in zip(tasks, task_paths):
+       
+        e_sum       = 0
+        alpha_sum   = 0
+        
+        e_rel       = task.rel_position
+        edge        = task.edges
+        path_length = len(path)
+        
+        for edge in path:
+            u,v = edge
+            edge_vars_pair = graph.edges[u][v]
+            
+            e_var         = edge_vars_pair[0]
+            scale_var     = edge_vars_pair[1]
+            directed_edge = edge_vars_pair[2]
+            if directed_edge != (u,v): # invert direction if you traverse the edge backwards
+                e_var = -e_var
+            
+            e_sum     += e_var
+            alpha_sum += scale_var
+            
+            constraints += [cp.norm(e_var) <= COMM_DISTANCE]
+            constraints += [scale_var >= 0]
 
-    #create a variable for every agents exept the first, which provides a reference
-    num_vars = len(used_agents) - 1
-    dim = len(task_pos[0])
+        # containment constraint
+        for vertex in vertices_list:
+            vv = e_sum + alpha_sum * task.size * vertex
+            constraints.append(H @ (e_rel- vv) <= b * task.size )
+
+    # find cycles TODO: implement cycle overload
+    cycles = graph.find_all_cycles()
+    logger.info(f"Found {len(cycles)} cycles in the graph")
+
+    # define cost
+    cost = 0.
+    C_norm = 0.1
+    epsilon = 0.01
+    for edge in graph.edge_list:
+        i,j = edge
+        edge_vars_pair = graph.edges[i][j]
+        e_var, scale_var,_ = edge_vars_pair
+        
+        t = cp.Variable()
+        constraints += [t >= 0]
+
+        cost += -BOX_WEIGHT *scale_var 
+        cost += C_norm * cp.norm(e_var)
+
+
+    prob = cp.Problem(cp.Minimize(cost), constraints)
+    prob.solve(solver=cp.CLARABEL, verbose=False)
     
-    cp_start_par = np.zeros((1,dim))
-    cp_vars = cp.Variable((num_vars, dim))
-    agent_pos = cp.vstack([cp_start_par, cp_vars])
+    if prob.status != cp.OPTIMAL:
+        return prob.status, []
     
-    #---------------------------------------
-    #    Variables for box optimization
-    #---------------------------------------
-    box_dim = len(task_box[0])
-    unique_tasks = len(np.unique(flatten(task_paths), axis=0))
-    bbox = cp.Variable((unique_tasks, box_dim))#n boxes x, -x, y, -y
+    # create a new sets of tasks
+    new_tasks   = []
+    added_edges = []
 
-    bbox_vertices = vertices(bbox, box_dim)
+    for task, path in zip(tasks, task_paths):
+        for edge in path:
+            
+            u,v = edge
+            edge_vars_pair = graph.edges[u][v]
+            
+            e_var     =   edge_vars_pair[0]
+            scale_var = edge_vars_pair[1]
 
-    tasks = rel_task_pos_select[rel_indices] @ agent_pos
-    num_vert = bbox_vertices.shape[0] // unique_tasks
-    task_stacked = cp.vstack([tasks for i in range(num_vert)])
-    
-    
-    #--------------------------------------------------------------------------
-    #    Perform the main optimization of the positions as well as the boxes
-    #--------------------------------------------------------------------------
-
-    #define the objective, box size is prioritesed over edge length
-    task_objective = cp.norm(rel_task_pos_select @ agent_pos, 'fro')
-    #box_objective = -cp.sum(bbox) -MIN_WEIGHT1*cp.sum(cp.min(bbox, axis=0)) -MIN_WEIGHT2*cp.sum(cp.min(bbox)) #cp.sum(task_box - tasks_selector @ bbox)
-    box_objective = -cp.sum(bbox) + cp.dotsort(cp.min(bbox, axis=0), np.array([-(i+1)**2 for i in range(box_dim)]))
-
-    objective = cp.Minimize(task_objective+BOX_WEIGHT*box_objective)
-
-    #define the constraints 
-    task_constraint = [
-        abs_task_pos_select @ agent_pos == task_pos]
-    
-    box_constraint = [
-        tasks_selector @ bbox <= task_box,
-        cp.norm(bbox_vertices+task_stacked, axis=1)<=COMM_DISTANCE,
-        bbox >= 0]
-                                   
-    
-    prob = cp.Problem(objective, task_constraint + box_constraint)
-    result = prob.solve(solver=cp.CLARABEL)
-
-    #check whether optimization was succesful
-    if prob.status in ["infeasible", "unbounded"]:
-        succes = False
-        return succes, None, None
-    
-    succes = True
-    
-    if return_mode == "relative":
-        rel_positions = rel_task_pos_select[rel_indices] @ agent_pos.value
-        rel_box = bbox.value
-        rel_edges = np.array(flatten(task_paths))[rel_indices]
-
-        pos_edge_list = [(edge, pos) for edge, pos in zip(rel_edges, rel_positions)]
-        box_edge_list = [(edge, box) for edge, box in zip(rel_edges, rel_box)]
-
-        return succes, pos_edge_list, box_edge_list
-
-
-    if return_mode == "absolute":
-        return agent_pos.value
+            e_value     = e_var.value
+            scale_value = scale_var.value
+            if edge != (u,v): # invert direction if you traverse the edge backwards
+                e_value = -e_value
+            
+            if (u,v) in added_edges or (v,u) in added_edges:
+                continue # do not add the task twice
+            
+            new_task = copy.deepcopy(task)
+            
+            # add the new task!
+            new_task.edges        = (u,v)
+            new_task.rel_position = e_value.flatten()
+            new_task.size         = scale_value 
+            
+            new_tasks.append(new_task)
+            added_edges.append((u,v))
+            logger.info(f"Norm of edge {u}-{v}: {np.linalg.norm(e_value)} with scale {scale_value}")
+        
+    return prob.status, new_tasks   
