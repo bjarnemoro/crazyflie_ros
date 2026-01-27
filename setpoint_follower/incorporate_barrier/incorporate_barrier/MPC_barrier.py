@@ -16,12 +16,14 @@ class MPCsolver:
         dt: float,
         horizon: int,
         max_input: float,
+        communication_distance: float,
     ):
         self.solver      = cp.CLARABEL
         self.initialized = False
         self.dt          = dt
         self.horizon     = horizon
         self.max_input   = max_input
+        self.communication_distance = communication_distance
 
         self.states_dim      = agents_dim
         self.inputs_dim      = agents_dim
@@ -68,7 +70,8 @@ class MPCsolver:
         self.x0 = cp.Parameter(self.total_state_dim)
 
         # Time-varying constraint data
-        self.slack = cp.Variable((nx, self.horizon + 1), nonneg=True)
+        self.task_slack = cp.Variable((nx, self.horizon + 1), nonneg=True)
+        self.comm_slack = cp.Variable((self.horizon + 1), nonneg=True)
         self.b_offset = cp.Parameter((nx, self.horizon + 1))
 
         constraints = []
@@ -109,11 +112,14 @@ class MPCsolver:
                 A_block = H @ C
                 
                 constraints += [
-                    A_block @ self.x[:, k] <= self.b_offset[qq*rows_per_constraint :qq*rows_per_constraint + rows_per_constraint, k] + self.slack[qq*rows_per_constraint :qq*rows_per_constraint + rows_per_constraint, k]
+                    A_block @ self.x[:, k] <= self.b_offset[qq*rows_per_constraint :qq*rows_per_constraint + rows_per_constraint, k] + self.task_slack[qq*rows_per_constraint :qq*rows_per_constraint + rows_per_constraint, k]
                 ]
 
+                # add communication distance constraint
+                constraints += [ cp.sum_squares(C @ self.x[:, k]) <= self.communication_distance**2 + self.comm_slack[k] ]
+
         # Objective
-        objective = cp.Minimize(1e3 * cp.sum_squares(self.slack) +  cp.sum_squares(self.u))
+        objective = cp.Minimize(1e3 * cp.sum_squares(self.task_slack) +  cp.sum_squares(self.u) + 1e3 * cp.sum_squares(self.comm_slack))
 
         self.prob = cp.Problem(objective, constraints)
 
@@ -128,11 +134,9 @@ class MPCsolver:
 
             for square in self.squares:
                 if square.time_grid[0] <= t < square.time_grid[1]:
-                    # b_vec.append(square.compute_offset_vector(t).reshape(-1,1))
-                    b_vec.append(square.b_vector.reshape(-1,1))
+                    b_vec.append(square.compute_offset_vector(t).reshape(-1,1))
                 else:
-                    # b_vec.append(square.compute_offset_vector(square.time_grid[1]).reshape(-1,1))
-                    b_vec.append(square.b_vector.reshape(-1,1))
+                    b_vec.append(np.ones((2*self.states_dim,1)) * 1e4)  # Large value to effectively disable the constraint
             
             b_mat.append(np.vstack(b_vec))
 
@@ -154,7 +158,7 @@ class MPCsolver:
     def __call__(self, x0, t0, return_val="u0",logger=None):
         res = self.solve(x0, t0, return_val,logger)
         # if logger is not None:
-        #     logger.info(f"slack value:\n{self.slack.value}")
+        #     logger.info(f"slack value:\n{self.task_slack.value}")
         return res
 
 

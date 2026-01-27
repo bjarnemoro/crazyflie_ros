@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import random,itertools
 from typing import List
+from copy import deepcopy
 
 Path = List[float]  # type alias
 
@@ -56,45 +57,44 @@ def select_communication_inconsistent_tasks(comm_graph : dict[dict,int], task_li
 
         elif np.linalg.norm(task.rel_position) > comm_dist: # a task is inconsistent also if it requires a relative configuration that spans a bigger distance than the communication radius
             inconsistent_tasks.append(task)
-            log(f"added")
         else:
             consistent_tasks.append(task)
 
     return inconsistent_tasks, consistent_tasks
 
 
-
-def all_paths(graph, start, end, path=None, cost=None):
+def all_paths(graph, start, end, path=None, cost=0):
     """
-    Returns all the paths from start to end in the given graph along with their costs.
-    The paths are given as a list of lists, and the costs as a list of integers.
+    Returns all simple paths from start to end and their costs.
+    graph[u] = {v: weight}
     """
 
-    if path is None and cost is None:
+    if path is None:
         path = []
-        cost = 0
-    
-    path = path + [start]
-    if len(path) > 1:
-        cost += graph[path[-2]][start] 
-    else:
-        cost = 0
 
+    path = path + [start]
 
     if start == end:
         return [path], [cost]
 
     if start not in graph:
-        return [], [0]
+        return [], []
 
     paths = []
     costs = []
-    for neighbor in graph[start]:
-        if neighbor not in path:  # avoid cycles
-            new_paths, new_costs = all_paths(graph, neighbor, end, path, cost)
-            for p, c in zip(new_paths, new_costs):
-                paths.append(p)
-                costs.append(c)
+
+    for neighbor, weight in graph[start].items():
+        if neighbor not in path:
+            new_paths, new_costs = all_paths(
+                graph,
+                neighbor,
+                end,
+                path,
+                cost + weight
+            )
+            paths.extend(new_paths)
+            costs.extend(new_costs)
+
     return paths, costs
 
 def add_weight_to_path(graph : dict[dict], path : list) -> int:
@@ -108,10 +108,80 @@ def add_weight_to_path(graph : dict[dict], path : list) -> int:
         return 0
 
     for i in range(len(path) - 1):
-        graph[path[i]][path[i+1]] += 1
-        graph[path[i+1]][path[i]] += 1
+        graph[path[i]][path[i+1]] += 10
+        graph[path[i+1]][path[i]] += 10
 
     return graph
+
+
+
+class DecompositionTrial:
+    def __init__(self, permutation_of_tasks: list[Task], 
+                       paths_dict          : dict[Task, tuple[Path,float]],                       
+                       will_be_feasible    : bool,
+                       total_cost          : float):
+        
+        self.permutation_of_tasks = permutation_of_tasks   # gives the original permutation of tasks that created this decomposition (we will need it just for visualization)
+        self.paths_dict           = paths_dict             # for each task it contains (path, cost)
+        self.will_be_feasible     = will_be_feasible       # if in the current communicaiton graph there is at least one task can not be bridged due to insufficient number of agents, then this is marked as unfeasible
+        self.total_cost           = total_cost
+
+
+def decomposition_path_guesses(inconsistent_tasks : list[Task], graph : dict[dict], communication_radious : float, logger = None) -> list[DecompositionTrial]:
+    """
+    Generate decomposition path guesses for a set of inconsistent tasks :
+
+    1. At first we create all the possible permutations of the inconsistent tasks.
+       This is because for each permutation, the weighting of the communication graph will 
+       be done differently. leading to different choices of the decomposition path.
+    
+    2. For each task permutation we take the inconsistent tasks one by one. For each task we find
+       all the paths between the source and sink and we get the cost of the path. The cost of the path is based on the number of tasks 
+       assigned to each edge of the task.
+
+    3. For each inconsistent edge we select the path based on two conditions:
+
+       a. The path must be valid in the current communication graph. So the path length needs to be long enough based on the communication radious conditon norm(center)/comm_radious
+       b. The path must minimize the cost, taking into account the weights assigned to the edges.
+    4. After an optimal communication path is choosen, then a weight is added to each edge along the path ovr the communicaiton graph to represent that this edge was already used
+       and it is expensive to reuse it.
+
+       This process is repeated for each task in the permutation, resulting in a set of paths for each task.
+
+       if there is at least one task for which there is no sufficiently long path that satisfies the minimum length condition norm(center)/comm_radious, then 
+       the whole decomposition is declared already infeasible before the actual convex solver is called. We can still use this decomposition using slack variables.
+
+    """
+    
+
+    logger.error("Number of inconsistent tasks: {}".format(len(inconsistent_tasks)))
+    paths_dict   = {} # for each task it contains a list of possible valid decomposition paths
+    is_feasible  = True
+    total_cost   = 0.
+    
+    for task in inconsistent_tasks:
+        u, v = task.edges
+        paths, costs = all_paths(graph , u, v)
+        lengths = [len(p) - 1 for p in paths]
+
+        center            = np.array(task.rel_position)
+        min_length        = np.ceil(np.linalg.norm(center) / (communication_radious * 0.9))
+        valid_paths_costs = [ (p,c) for p, c, l in zip(paths, costs, lengths) if l >= min_length]
+        
+        if not len(valid_paths_costs):
+            logger.error(f"No valid path found for task {task.edges} with min length {min_length}. Marking decomposition as infeasible.")
+            paths_dict[task.ID] = paths
+
+        # sort by cost
+        valid_paths_costs.sort(key=lambda x: x[1])
+
+        # keep only the paths
+        valid_paths = [ p for p, c in valid_paths_costs]
+
+        paths_dict[task.ID] = valid_paths
+
+    return paths_dict
+
 
 
 
@@ -247,98 +317,6 @@ def animate_graph_updates(graph, kt_list, pos=None, interval=1500):
                                   interval=interval,
                                   repeat=False)
     plt.show()
-
-
-
-class DecompositionTrial:
-    def __init__(self, permutation_of_tasks: list[Task], 
-                       paths_dict          : dict[Task, tuple[Path,float]],                       
-                       will_be_feasible    : bool,
-                       total_cost          : float):
-        
-        self.permutation_of_tasks = permutation_of_tasks   # gives the original permutation of tasks that created this decomposition (we will need it just for visualization)
-        self.paths_dict           = paths_dict             # for each task it contains (path, cost)
-        self.will_be_feasible     = will_be_feasible       # if in the current communicaiton graph there is at least one task can not be bridged due to insufficient number of agents, then this is marked as unfeasible
-        self.total_cost           = total_cost
-
-
-def decomposition_path_guesses(inconsistent_tasks : list[Task], graph : dict[dict], communication_radious : float) -> list[DecompositionTrial]:
-    """
-    Generate decomposition path guesses for a set of inconsistent tasks :
-
-    1. At first we create all the possible permutations of the inconsistent tasks.
-       This is because for each permutation, the weighting of the communication graph will 
-       be done differently. leading to different choices of the decomposition path.
-    
-    2. For each task permutation we take the inconsistent tasks one by one. For each task we find
-       all the paths between the source and sink and we get the cost of the path. The cost of the path is based on the number of tasks 
-       assigned to each edge of the task.
-
-    3. For each inconsistent edge we select the path based on two conditions:
-
-       a. The path must be valid in the current communication graph. So the path length needs to be long enough based on the communication radious conditon norm(center)/comm_radious
-       b. The path must minimize the cost, taking into account the weights assigned to the edges.
-    4. After an optimal communication path is choosen, then a weight is added to each edge along the path ovr the communicaiton graph to represent that this edge was already used
-       and it is expensive to reuse it.
-
-       This process is repeated for each task in the permutation, resulting in a set of paths for each task.
-
-       if there is at least one task for which there is no sufficiently long path that satisfies the minimum length condition norm(center)/comm_radious, then 
-       the whole decomposition is declared already infeasible before the actual convex solver is called. We can still use this decomposition using slack variables.
-
-    """
-
-    # n! permutations of the elements in the list. 
-    permutations = itertools.permutations(inconsistent_tasks)
-
-    # We will give the following output 
-    list_of_decompositions = []
-
-    for task_list_permutation in permutations: # all permuations in which tasks can be decomposed
-        copied_graph = {k: v.copy() for k, v in graph.items()}
-        paths_dict   = {}
-        is_feasible  = True
-        total_cost   = 0
-        
-
-        for task in task_list_permutation:
-            u, v = task.edges
-            paths, costs = all_paths(copied_graph, u, v)
-            lengths = [len(path)-1 for path in paths]
-
-            # define minimum path length for this task
-            center = np.array(task.rel_position)
-            min_length = np.ceil(np.linalg.norm(center)/(communication_radious/2))
-            if max(lengths) < min_length: # there is no path that is sufficiently long to bridge this task. The take the longest you can
-                chosen_path = paths[np.argmax(lengths)]
-                chosen_cost = costs[np.argmax(lengths)]
-                paths_dict[task.ID] = chosen_path
-                is_feasible =   False # this task will render the whole task decomposition infeasible
-                total_cost += chosen_cost
-            
-            else : # select the paths that are sufficiently long and then take the one of minimum cost
-                valid_paths = [path for path, length in zip(paths, lengths) if length >= min_length]
-                if valid_paths:
-                    chosen_path      = valid_paths[np.argmin([costs[paths.index(p)] for p in valid_paths])]
-                    chosen_cost      = costs[paths.index(chosen_path)]
-                    paths_dict[task.ID] = chosen_path
-                    total_cost += chosen_cost
-
-            # add weight to the graph for this selection so that then other paths are selected based on this selection
-            add_weight_to_path(copied_graph, chosen_path)
-        
-        # Decomposition
-        decomposition_trial = DecompositionTrial(permutation_of_tasks= task_list_permutation, 
-                                                 paths_dict          = paths_dict, 
-                                                 will_be_feasible    = is_feasible,
-                                                 total_cost          = total_cost)
-
-        list_of_decompositions.append(decomposition_trial)
-
-    return list_of_decompositions
-
-
-
 
 
 if __name__ == "__main__":

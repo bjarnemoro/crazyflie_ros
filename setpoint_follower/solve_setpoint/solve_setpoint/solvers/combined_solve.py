@@ -142,9 +142,9 @@ def solve_task_decomposition(tasks , task_paths: list[tuple[int,int]], BOX_WEIGH
 
     # find cycles TODO: implement cycle overload
     cycles = graph.find_all_cycles()
-    logger.info(f"Found {len(cycles)} cycles in the graph")
+    logger.debug(f"Found {len(cycles)} cycles in the graph")
     for cycle in cycles:
-        logger.info(f"Cycle: {cycle}")
+        logger.debug(f"Cycle: {cycle}")
 
     # add constraint on the cycle
     for cycle in cycles:
@@ -215,9 +215,9 @@ def solve_task_decomposition(tasks , task_paths: list[tuple[int,int]], BOX_WEIGH
             new_task.edges        = (u,v)
             new_task.rel_position = e_value.flatten()
             new_task.size         = scale_value * task.size
-            
             new_tasks.append(new_task)
             added_edges.append((u,v))
-            logger.info(f"Norm of edge {u}-{v}: {np.linalg.norm(e_value)} with size {new_task.size}")
+            
+            logger.debug(f"edge {u}-{v}: rel pos {e_value} with size {new_task.size}")
         
     return prob.status, new_tasks   

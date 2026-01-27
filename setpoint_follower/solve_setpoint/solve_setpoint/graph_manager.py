@@ -28,21 +28,22 @@ class GraphManager:
 
         self.online_status = np.zeros(self.NUM_AGENTS)
 
-    def compute_current_communication_edges(self):
+    def compute_current_communication_edges(self,logger):
         edges = []
         for i in range(1,self.NUM_AGENTS +1):
             for j in range(i+1, self.NUM_AGENTS +1):
-                if np.abs(np.linalg.norm(self.__agent_pos[i-1]-self.__agent_pos[j-1])) < self.COMM_DISTANCE:
+                if np.linalg.norm(self.__agent_pos[i-1]-self.__agent_pos[j-1]) < self.COMM_DISTANCE:
                     edges.append((i,j))
         self.__current_comm_edges = edges
         if self.__comm_edges is None:
-            self.__comm_edges = deepcopy(self.__current_comm_edges)
+            self.__comm_edges = self.__current_comm_edges
     
     def did_graph_change(self):
-        for edge in self.__current_comm_edges:
-            if edge not in self.__comm_edges:
-                return True
-        return False
+        sorted_current_edges = [tuple(sorted(edge)) for edge in self.__current_comm_edges]
+        sorted_previous_edges = [tuple(sorted(edge)) for edge in self.__comm_edges]
+
+        # Compare the sorted edge lists
+        return sorted_current_edges != sorted_previous_edges
     
     def update(self):
         
@@ -55,20 +56,22 @@ class GraphManager:
             self.__comm_graph[edge[1]].append(edge[0])
 
     def set_pos_callback(self, msg, idx, log):
-        """set the position of an agent by index"""
-        
+        """
+        set the position of an agent by index. Index starts from 1 to N_agents so 
+        we need to subtract 1 to access the array
+        """
     
-        if not self.online_status[idx]:
-            self.online_status[idx] = 1
+        if not self.online_status[idx-1]:
+            self.online_status[idx-1] = 1
 
         if type(msg) == Odometry:
-            self.__agent_pos[idx][0] = msg.pose.pose.position.x
-            self.__agent_pos[idx][1] = msg.pose.pose.position.y
-            self.__agent_pos[idx][2] = msg.pose.pose.position.z
+            self.__agent_pos[idx-1][0] = msg.pose.pose.position.x
+            self.__agent_pos[idx-1][1] = msg.pose.pose.position.y
+            self.__agent_pos[idx-1][2] = msg.pose.pose.position.z
         elif type(msg) == PoseStamped:
-            self.__agent_pos[idx][0] = msg.pose.position.x
-            self.__agent_pos[idx][1] = msg.pose.position.y
-            self.__agent_pos[idx][2] = msg.pose.position.z
+            self.__agent_pos[idx-1][0] = msg.pose.position.x
+            self.__agent_pos[idx-1][1] = msg.pose.position.y
+            self.__agent_pos[idx-1][2] = msg.pose.position.z
 
     def get_pos(self):
         return self.__agent_pos

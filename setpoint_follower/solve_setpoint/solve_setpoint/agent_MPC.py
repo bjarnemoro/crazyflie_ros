@@ -16,7 +16,7 @@ from barrier_msg.msg import BMsg, BMsglist
 from solve_setpoint.bMsg import bMsg, HyperCubeHandler
 from incorporate_barrier.MPC_barrier import MPCsolver
 from crazyflie_interfaces.srv import Takeoff
-from solve_setpoint.utils import WorkingMode, AgentState, ManagerState
+from solve_setpoint.utils import WorkingMode, AgentState, ManagerState, AnsiColor
 
 class MPC_agents(Node):
     def __init__(self):
@@ -29,6 +29,8 @@ class MPC_agents(Node):
         self.declare_parameter("SPEED", 0.4)
         self.declare_parameter("AGENT_TIMER", 0.1)
         self.declare_parameter("HOOVERING_HEIGHT",1.0)
+        self.declare_parameter("COMM_DISTANCE", 1.0)
+
 
         self.robot_prefix     = self.get_parameter('robot_prefix').value
         self.SYSTEM           = self.get_parameter("SYSTEM").value
@@ -37,6 +39,7 @@ class MPC_agents(Node):
         self.NUM_AGENTS       = self.get_parameter("NUM_AGENTS").value
         self.AGENT_TIMER      = self.get_parameter("AGENT_TIMER").value
         self.HOOVERING_HEIGHT = self.get_parameter("HOOVERING_HEIGHT").value
+        self.COMM_DISTANCE    = self.get_parameter("COMM_DISTANCE").value
 
         self.landing_time = 10.0 # takes 8 seconds to land
         self.Z_SPEED      = 0.5
@@ -45,10 +48,13 @@ class MPC_agents(Node):
                                 agents_dim = self.DIM,
                                 dt         = 0.1,
                                 horizon    = 20,
-                                max_input  = self.SPEED)
+                                max_input  = self.SPEED,
+                                communication_distance = self.COMM_DISTANCE)
 
-        self.barrier_callback = self.create_subscription(BMsglist, "/barriers", self.on_barrier_message, 10)
-        self.state_publisher  = self.create_publisher(Int32, "/agent_state", 10)
+        self.barrier_callback     = self.create_subscription(BMsglist, "/barriers", self.on_barrier_message, 10)
+        self.state_publisher      = self.create_publisher(Int32, "/agent_state", 10)
+        self.landing_command_sub  = self.create_subscription(Int32, "/landing_command", self.landing_command_callback, 10)
+        self.gather_command_sub   = self.create_subscription(Int32, "/gather_command", self.on_gather_callback, 10)
 
         if self.SYSTEM == WorkingMode.SIM:
             self.drones = ['{}{}'.format(self.robot_prefix, i) for i in range(1,self.NUM_AGENTS+1)]
@@ -82,7 +88,7 @@ class MPC_agents(Node):
             if self.SYSTEM == WorkingMode.REAL:
                 takeoffService = self.create_client(Takeoff, drone + '/takeoff')
                 while not takeoffService.wait_for_service(timeout_sec=1.0):
-                    self.get_logger().info('takeoff service not available, waiting again... Make sure the crazyswarm is launched')
+                    self.get_logger().warn('takeoff service not available, waiting again... Make sure the crazyswarm is launched')
                 self.takeoff_services.append(takeoffService)
             
                 
@@ -113,6 +119,22 @@ class MPC_agents(Node):
         self.start_set = False
         self.land_pos  = None
         self.get_logger().info('Finish startup')
+
+    def landing_command_callback(self, msg):
+        if msg.data == 1:
+            if self.state != AgentState.LANDING:
+                self.get_logger().info(f'{AnsiColor.BLUE} Received landing command. Switching to LANDING state... {AnsiColor.RESET}')
+                self.state = AgentState.LANDING
+        else:
+            self.get_logger().info(f'Received invalid landing command. Message discarded...')
+
+    def on_gather_callback(self, msg):
+        if msg.data == 1:
+            if self.state != AgentState.GATHERING:
+                self.get_logger().info(f'{AnsiColor.BLUE} Received gathering command. Switching to GATHERING state... {AnsiColor.RESET}')
+                self.state = AgentState.GATHERING
+        else:
+            self.get_logger().info(f'Received invalid gathering command. Message discarded...')
 
     def odom_callback(self, msg, idx):
         if type(msg) == Odometry:
@@ -153,15 +175,8 @@ class MPC_agents(Node):
                 bmsg.task_id, 
                 bmsg.edge_i, 
                 bmsg.edge_j)
-
-            self.get_logger().info(f"Barrier from {my_msg.edge_i} to {my_msg.edge_j}. B vector : {my_msg.b_vector}")
             
             self.barriers.append(my_msg)
-
-        # for bmsg in self.barriers:
-        #     candidates = [bmsg2 for bmsg2 in self.barriers if bmsg2.edge_j == bmsg.edge_i]
-        #     if candidates:
-        #         bmsg.add_neighbour(candidates[0])
         
         self.mpc_solver.initialize_problem(self.barriers,self.get_logger())
 
@@ -185,10 +200,10 @@ class MPC_agents(Node):
 
             self.called_takeoff = True
         
-        self.get_logger().info(f'Taking off... Time elapsed: {self.time.nanoseconds / 1e9:.2f}s. Will finish at {1.2*self.time_to_take_off}s')
+        self.get_logger().info(f'{AnsiColor.BLUE} Taking off... Time elapsed: {self.time.nanoseconds / 1e9:.2f}s. Will finish at {1.2*self.time_to_take_off}s {AnsiColor.RESET}',throttle_duration_sec=2.0)
 
         if self.time.nanoseconds / 1e9 > self.time_to_take_off*1.2:
-            self.get_logger().info(f'Take off finished...')
+            self.get_logger().info(f' {AnsiColor.BLUE} Take off finished... {AnsiColor.RESET}')
             take_off_finished = True
         
         return take_off_finished
@@ -205,7 +220,7 @@ class MPC_agents(Node):
         if self.SYSTEM == WorkingMode.SIM:
             for idx, publisher in enumerate(self.twist_publishers):
                 msg = Twist()
-                msg.linear.z = np.clip(0. - self.pos[idx, 2], -self.Z_SPEED, self.Z_SPEED)
+                msg.linear.z = np.clip(-self.hoover_heights[idx]/self.landing_time, -self.Z_SPEED, self.Z_SPEED)
                 publisher.publish(msg)
 
         if self.SYSTEM == WorkingMode.REAL:
@@ -218,7 +233,7 @@ class MPC_agents(Node):
                 publisher.publish(pos)
         
         if time_sec > self.landing_time:
-            self.logger().info(f'Landing finished...')
+            self.get_logger().info(f'{AnsiColor.BLUE} Landing finished... {AnsiColor.RESET}', throttle_duration_sec=5.0)
             landing_finished = True
 
         return landing_finished
@@ -236,6 +251,7 @@ class MPC_agents(Node):
         
         self.time = self.get_clock().now() - self.start_mission_time
         time_sec = self.time.nanoseconds / 1e9
+        self.get_logger().info(f"{AnsiColor.BLUE} Running MPC mission... Time elapsed: {time_sec:.2f}s {AnsiColor.RESET}", throttle_duration_sec=2.0)
 
         if self.DIM == 2:
             x0 = self.pos[:,:2].flatten()
@@ -285,15 +301,13 @@ class MPC_agents(Node):
             is_finished = self.initiate_takeoff()
             if is_finished:
                 self.state = AgentState.READY
-                self.get_logger().info(f'Switching to READY state. Starting MPC mission...')
+                self.get_logger().info(f'{AnsiColor.BLUE} Switching to READY state. Starting MPC mission...{AnsiColor.RESET}')
                 self.start_time = self.get_clock().now()
 
         elif self.state == AgentState.LANDING:
             is_finished = self.initiate_landing()
             if is_finished:
-                self.get_logger().info(f'Landing completed. Shutting down node...')
-                rclpy.shutdown()
-                sys.exit(0)
+                self.get_logger().info(f'{AnsiColor.BLUE} Landing completed. Shutting down node...{AnsiColor.RESET}', throttle_duration_sec=5.0)
            
         elif self.state == AgentState.READY:
             self.run_mission()

@@ -2,9 +2,10 @@ from enum import IntEnum, Enum
 
 class AgentState(IntEnum):
     """Define the three states of the drone."""
-    TAKEOFF  = 0
-    READY    = 1
-    LANDING  = 2
+    TAKEOFF   = 0
+    READY     = 1
+    LANDING   = 2
+    GATHERING = 3
 
 class WorkingMode(IntEnum):
     """Defines if the code is launched from simulation or from the real crazyflie"""
@@ -38,3 +39,13 @@ class AnsiColor(str, Enum):
     BRIGHT_VIOLET  = "\033[95m"
     BRIGHT_CYAN    = "\033[96m"
     BRIGHT_WHITE   = "\033[97m"
+
+    # BOLD colors
+    BOLD_BLACK   = "\033[1;30m"
+    BOLD_RED     = "\033[1;31m"
+    BOLD_GREEN   = "\033[1;32m"
+    BOLD_YELLOW  = "\033[1;33m"
+    BOLD_BLUE    = "\033[1;34m"
+    BOLD_VIOLET  = "\033[1;35m"
+    BOLD_CYAN    = "\033[1;36m"
+    BOLD_WHITE   = "\033[1;37m"

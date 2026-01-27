@@ -76,9 +76,9 @@ class TaskManager():
         # find corrent period
         active_period_num = None
         for j,period in enumerate(self.periods):
-            if current_time <= period[1] :
+            if current_time < period[1] :
                 active_period_num = j
-                break
+                break # only one period is active at a time
 
         active_tasks = self.task_per_period[active_period_num]
         active_tasks
@@ -91,12 +91,9 @@ class TaskManager():
                         raise Exception("Multiple tasks assigned to the same edge at priod {}".format(current_time))
 
 
-        task_paths, is_feasible = self.compute_task_paths(active_tasks, comm_edges, log) # for each active task it computes the decomposition path. 
-
-        if not is_feasible:
-            raise Exception("No feasible decomposition found for the current communication graph and tasks")
+        possible_paths = self.compute_task_paths(active_tasks, comm_edges, log) # for each active task it computes the decomposition path. 
         
-        return active_tasks, task_paths, is_feasible
+        return active_tasks, possible_paths
         
     def compute_task_paths(self, active_tasks: list[Task], comm_edges, log):
         """
@@ -108,39 +105,32 @@ class TaskManager():
 
         graph                                = build_graph(comm_edges, active_tasks)
         inconsistent_tasks, consistent_tasks = select_communication_inconsistent_tasks(graph, active_tasks, self.COMM_DISTANCE, log)
-        feasible  = True
+        decomposition_paths_dict             = decomposition_path_guesses(inconsistent_tasks, graph, self.COMM_DISTANCE, log) # returns a list of possible decomposition
+        if not len(inconsistent_tasks):
+            log.error("All tasks are communication consistent at this time step.")
         
-        if len(inconsistent_tasks):
-            list_of_decompositions_paths = decomposition_path_guesses(inconsistent_tasks, graph, self.COMM_DISTANCE) # returns a list of possible decomposition
+        for task in inconsistent_tasks:
+            log.info(f"For task between agents {task.edges} found decomposition path: {len(decomposition_paths_dict[task.ID])}")
         
-            # select a decomposition that is feasible 
-            best_cost = float('inf')
-            best_paths_dict = None
-
-            for sol in list_of_decompositions_paths:
-                if sol.will_be_feasible:
-                    cost       = sol.total_cost
-                    paths_dict = sol.paths_dict
-                    if cost < best_cost:
-                        best_cost = cost
-                        best_paths_dict = paths_dict
+        possible_decomposition_paths = []
+        for _ in range(100) : # try multiple times to find decomposition paths
+            paths = []
+            for task in active_tasks:
+                if task in consistent_tasks:
+                    paths.append([task.edges])
+                if task in inconsistent_tasks:
+                    possible_paths = decomposition_paths_dict[task.ID]
+                    # sample a path biasing fofr shorter paths
+                    idx = int(np.random.exponential(scale=1.0))
+                    idx = min(idx, len(possible_paths) - 1)
+                    path = possible_paths[idx]
+                    
+                    path_list = [[path[i], path[i+1]] for i in range(len(path)-1)]
+                    paths.append(path_list)
             
-            if  best_cost == float('inf'):
-                feasible = False
-                
-        if not feasible:
-            return [], feasible
+            possible_decomposition_paths.append(paths)
 
-        paths = []
-        for task in active_tasks:
-            if task in consistent_tasks:
-                paths.append([task.edges])
-            if task in inconsistent_tasks:
-                path = paths_dict[task.ID]
-                path_list = [[path[i], path[i+1]] for i in range(len(path)-1)]
-                paths.append(path_list)
-
-        return paths, feasible 
+        return possible_decomposition_paths
 
     def load_task_path(self, task_path):
         current_dir = os.path.dirname(os.path.abspath(__file__))
