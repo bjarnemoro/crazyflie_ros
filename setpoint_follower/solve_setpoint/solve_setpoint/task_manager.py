@@ -173,7 +173,7 @@ class TaskManager():
         tmsg = TMsg()
         
         tmsg.center.extend([ i for i in task.rel_position])
-        tmsg.size.extend([2 for _ in range(self.DIM * 2)])
+        tmsg.size.extend([max(2*task.size,0.1) for _ in range(self.DIM * 2)])
         
         tmsg.start   = float(task.timespan[0])
         tmsg.end     = float(task.timespan[1])

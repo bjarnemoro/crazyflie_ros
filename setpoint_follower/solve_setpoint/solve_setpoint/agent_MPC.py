@@ -12,15 +12,11 @@ from crazyflie_interfaces.msg import Position, FullState
 from rclpy.executors import MultiThreadedExecutor
 from std_msgs.msg import Int32
 
-#from barrier_msg.msg import Config
 from barrier_msg.msg import BMsg, BMsglist
 from solve_setpoint.bMsg import bMsg, HyperCubeHandler
 from incorporate_barrier.MPC_barrier import MPCsolver
 from crazyflie_interfaces.srv import Takeoff
 from solve_setpoint.utils import WorkingMode, AgentState, ManagerState
-
-LAND_TIME = 200
-HEIGHT    = 1.0
 
 class MPC_agents(Node):
     def __init__(self):
@@ -34,20 +30,25 @@ class MPC_agents(Node):
         self.declare_parameter("AGENT_TIMER", 0.1)
         self.declare_parameter("HOOVERING_HEIGHT",1.0)
 
-        self.robot_prefix = self.get_parameter('robot_prefix').value
-        self.SYSTEM = self.get_parameter("SYSTEM").value
-        self.DIM = self.get_parameter("DIM").value
-        self.SPEED = self.get_parameter("SPEED").value
-        self.NUM_AGENTS = self.get_parameter("NUM_AGENTS").value
-        self.AGENT_TIMER = self.get_parameter("AGENT_TIMER").value
+        self.robot_prefix     = self.get_parameter('robot_prefix').value
+        self.SYSTEM           = self.get_parameter("SYSTEM").value
+        self.DIM              = self.get_parameter("DIM").value
+        self.SPEED            = self.get_parameter("SPEED").value
+        self.NUM_AGENTS       = self.get_parameter("NUM_AGENTS").value
+        self.AGENT_TIMER      = self.get_parameter("AGENT_TIMER").value
         self.HOOVERING_HEIGHT = self.get_parameter("HOOVERING_HEIGHT").value
 
-        self.Z_SPEED = 0.5
+        self.landing_time = 10.0 # takes 8 seconds to land
+        self.Z_SPEED      = 0.5
 
-        self.solver = MPCsolver()
+        self.mpc_solver = MPCsolver(num_agents = self.NUM_AGENTS,
+                                agents_dim = self.DIM,
+                                dt         = 0.1,
+                                horizon    = 20,
+                                max_input  = self.SPEED)
 
         self.barrier_callback = self.create_subscription(BMsglist, "/barriers", self.on_barrier_message, 10)
-        self.state_publisher  = self.create_publisher(Int32, "/agent_state", 1)
+        self.state_publisher  = self.create_publisher(Int32, "/agent_state", 10)
 
         if self.SYSTEM == WorkingMode.SIM:
             self.drones = ['{}{}'.format(self.robot_prefix, i) for i in range(1,self.NUM_AGENTS+1)]
@@ -70,6 +71,7 @@ class MPC_agents(Node):
         self.odom_subscribers = []
         self.twist_publishers = []
         self.takeoff_services = []
+        self.hoover_heights   = [self.HOOVERING_HEIGHT + 0.1*idx for idx in range(self.NUM_AGENTS)]
         
         for i, drone in enumerate(self.drones):
             callback = lambda msg, idx=i: self.odom_callback(msg, idx)
@@ -95,23 +97,24 @@ class MPC_agents(Node):
         
         self.wait_for_time() # wait until the /clock message is correctly initialized by ros
         self.past_time = 0.
+        
         self.start_time = self.get_clock().now()
+        self.start_takeoff_time = None
+        self.start_landing_time = None
+        self.start_mission_time = None
 
         self.barriers = []
 
         self.k = 2
         self.active = False
-        self.is_set = False
         self.called_takeoff = False
         self.time_to_take_off = 5
 
         self.start_set = False
-        self.start_pos = np.zeros((3, self.NUM_AGENTS))
-        
-        self.saved_pos = self.start_pos.copy()
+        self.land_pos  = None
         self.get_logger().info('Finish startup')
 
-    def odom_callback(self, msg, idx=0):
+    def odom_callback(self, msg, idx):
         if type(msg) == Odometry:
             self.pos[idx, 0] = msg.pose.pose.position.x
             self.pos[idx, 1] = msg.pose.pose.position.y
@@ -150,106 +153,151 @@ class MPC_agents(Node):
                 bmsg.task_id, 
                 bmsg.edge_i, 
                 bmsg.edge_j)
+
+            self.get_logger().info(f"Barrier from {my_msg.edge_i} to {my_msg.edge_j}. B vector : {my_msg.b_vector}")
             
             self.barriers.append(my_msg)
 
-        self.active = False
-        for bmsg in self.barriers:
-            candidates = [bmsg2 for bmsg2 in self.barriers if bmsg2.edge_j == bmsg.edge_i]
-            if candidates:
-                bmsg.add_neighbour(candidates[0])
+        # for bmsg in self.barriers:
+        #     candidates = [bmsg2 for bmsg2 in self.barriers if bmsg2.edge_j == bmsg.edge_i]
+        #     if candidates:
+        #         bmsg.add_neighbour(candidates[0])
         
-        self.start_time = self.get_clock().now()
+        self.mpc_solver.initialize_problem(self.barriers,self.get_logger())
 
-        mpc_horizon  = 20
-        initial_time = 0.
-        agents_id    = [i for i in range(self.NUM_AGENTS)]
+    
+    def initiate_takeoff(self):
+        if self.start_takeoff_time is None:
+            self.start_takeoff_time = self.get_clock().now()
+        
+        self.time         = self.get_clock().now() - self.start_takeoff_time
+        take_off_finished = False
 
-        self.solver.initialize_problem(mpc_horizon, initial_time, self.barriers, agents_id , dt=0.1, MAX_INPUT=0.3)
-        self.active = True
+        if self.SYSTEM == WorkingMode.SIM:
+            for idx, publisher in enumerate(self.twist_publishers):
+                msg = Twist()
+                msg.linear.z = np.clip((self.hoover_heights[idx] - self.pos[idx, 2]), -self.Z_SPEED, self.Z_SPEED) # go to one meter altitude
+                publisher.publish(msg)
+        if self.SYSTEM == WorkingMode.REAL:
+            if not self.called_takeoff:
+                for idx, publisher in enumerate(self.twist_publishers):
+                    self.takeoff(self.hoover_heights[idx], self.time_to_take_off, idx) # TODO: have a closer look at the height (ensure collsion avoidance)
+
+            self.called_takeoff = True
+        
+        self.get_logger().info(f'Taking off... Time elapsed: {self.time.nanoseconds / 1e9:.2f}s. Will finish at {1.2*self.time_to_take_off}s')
+
+        if self.time.nanoseconds / 1e9 > self.time_to_take_off*1.2:
+            self.get_logger().info(f'Take off finished...')
+            take_off_finished = True
+        
+        return take_off_finished
+
+    def initiate_landing(self):
+
+        if self.start_landing_time is None:
+            self.start_landing_time = self.get_clock().now()
+
+        self.time         = self.get_clock().now() - self.start_landing_time
+        landing_finished  = False
+        time_sec = self.time.nanoseconds / 1e9
+
+        if self.SYSTEM == WorkingMode.SIM:
+            for idx, publisher in enumerate(self.twist_publishers):
+                msg = Twist()
+                msg.linear.z = np.clip(0. - self.pos[idx, 2], -self.Z_SPEED, self.Z_SPEED)
+                publisher.publish(msg)
+
+        if self.SYSTEM == WorkingMode.REAL:
+            for idx, publisher in enumerate(self.twist_publishers):
+                pos   = Position()
+                pos.x = self.pos[idx, 0]
+                pos.y = self.pos[idx, 1]
+                pos.z = min(self.hoover_heights[idx]-self.hoover_heights[idx]/self.landing_time *(time_sec), 1.)
+                pos.yaw = 0.
+                publisher.publish(pos)
+        
+        if time_sec > self.landing_time:
+            self.logger().info(f'Landing finished...')
+            landing_finished = True
+
+        return landing_finished
+
+    
+    def run_mission(self) :
+        
+        if self.start_mission_time is None:
+            self.start_mission_time = self.get_clock().now()
+
+        if not self.mpc_solver.initialized :
+            self.get_logger().info(f"MPC solver not initialized yet. Waiting for barrier messages...")
+            self.start_mission_time = self.get_clock().now() # reset time until system is ready to start
+            return
+        
+        self.time = self.get_clock().now() - self.start_mission_time
+        time_sec = self.time.nanoseconds / 1e9
+
+        if self.DIM == 2:
+            x0 = self.pos[:,:2].flatten()
+        elif self.DIM == 3:
+            x0 = self.pos.flatten()
+
+        if self.SYSTEM == WorkingMode.REAL :
+            x_new = self.mpc_solver(x0, time_sec, return_val="x_next", logger=self.get_logger())
+        elif self.SYSTEM == WorkingMode.SIM:
+            u     = self.mpc_solver(x0, time_sec,  return_val="u0", logger=self.get_logger())
+        
+        if self.SYSTEM == WorkingMode.SIM:
+            
+            for idx, publisher in enumerate(self.twist_publishers):
+                msg = Twist()
+                agent_index  = self.DIM*idx
+                msg.linear.x = u[agent_index+0]
+                msg.linear.y = u[agent_index+1]
+                msg.linear.z = np.clip(self.hoover_heights[idx] - self.pos[idx, 2], -self.Z_SPEED, self.Z_SPEED)
+                msg.angular.z = np.clip(0. - self.angles[idx, 2], -self.SPEED, self.SPEED)
+                publisher.publish(msg)
+        
+        if self.SYSTEM == WorkingMode.REAL:
+            
+            for idx, publisher in enumerate(self.twist_publishers):
+                
+                pos = Position()
+                agent_index  = self.DIM*idx
+                pos.x = x_new[agent_index+0]
+                pos.y = x_new[agent_index+1]
+                pos.z = self.hoover_heights[idx]
+                pos.yaw = 0.
+                publisher.publish(pos)
+
 
         
 
     def MPC_callback(self):
-        
+
         self.time      = self.get_clock().now() - self.start_time
-        time_sec       = self.time.nanoseconds / 1e9
-        dt_sec         = 0.1
         self.state_publisher.publish(Int32(data=int(self.state)))
 
-        if time_sec > LAND_TIME:
-            self.state = AgentState.LANDING
-            self.get_logger().info(f'Forced Landing after time {LAND_TIME}. Strating Landing .... Current time {time_sec}. Initial time {self.start_time}')
-            
-            if not self.is_set:
-                self.land_pos = self.pos.copy()
-                self.saved_pos = self.pos.copy()
-            self.is_set = True
+        if self.land_pos is None:
+            self.land_pos = self.pos.copy()
 
         if self.state == AgentState.TAKEOFF:
-            if self.SYSTEM == WorkingMode.SIM:
-                for idx, publisher in enumerate(self.twist_publishers):
-                    msg = Twist()
-                    msg.linear.z = np.clip((self.HOOVERING_HEIGHT + 0.1*idx - self.pos[idx, 2]), -self.Z_SPEED, self.Z_SPEED) # go to one meter altitude
-                    publisher.publish(msg)
-            if self.SYSTEM == WorkingMode.REAL:
-                if not self.called_takeoff:
-                    for idx, publisher in enumerate(self.twist_publishers):
-                        self.takeoff(self.HOOVERING_HEIGHT, self.time_to_take_off, idx) # TODO: have a closer look at the height (ensure collsion avoidance)
-
-                self.called_takeoff = True
-
-            if self.time.nanoseconds / 1e9 > self.time_to_take_off*2:
+            is_finished = self.initiate_takeoff()
+            if is_finished:
                 self.state = AgentState.READY
-                self.get_logger().info(f'Takeoff finished. Switching to READY.')
+                self.get_logger().info(f'Switching to READY state. Starting MPC mission...')
                 self.start_time = self.get_clock().now()
-        
-
-        elif self.state == AgentState.READY:
-            if self.DIM == 2:
-                x0 = self.pos[:,:2].flatten()
-            elif self.DIM == 3:
-                x0 = self.pos.flatten()
-
-            if self.active:
-                if self.SYSTEM == WorkingMode.REAL :
-                    x_new = self.solver.recompute(20, x0, time_sec, self.barriers, dt=dt_sec, return_val="x_next")
-                elif self.SYSTEM == WorkingMode.SIM:
-                    u     = self.solver.recompute(20, x0, time_sec, self.barriers, dt=dt_sec, return_val="u0")
-            else :
-                return
-
-            if self.SYSTEM == WorkingMode.SIM:
-                for idx, publisher in enumerate(self.twist_publishers):
-                    msg = Twist()
-                    msg.linear.x = u[self.DIM*idx+0]
-                    msg.linear.y = u[self.DIM*idx+1]
-                    msg.linear.z = np.clip(self.HOOVERING_HEIGHT + idx*0.1 - self.pos[idx, 2], -self.Z_SPEED, self.Z_SPEED)
-                    msg.angular.z = np.clip(0. - self.angles[idx, 2], -self.SPEED, self.SPEED)
-                    publisher.publish(msg)
-            if self.SYSTEM == WorkingMode.REAL:
-                for idx, publisher in enumerate(self.twist_publishers):
-                    pos = Position()
-                    pos.x = x_new[self.DIM*idx+0]#self.start_pos[idx][0]
-                    pos.y = x_new[self.DIM*idx+1]#self.start_pos[idx][1]
-                    pos.z = min(1.+0.2, 1.)
-                    pos.yaw = 0.
-                    publisher.publish(pos)
 
         elif self.state == AgentState.LANDING:
-            if self.SYSTEM == WorkingMode.SIM:
-                for idx, publisher in enumerate(self.twist_publishers):
-                    msg = Twist()
-                    msg.linear.z = np.clip(0. - self.pos[idx, 2], -self.Z_SPEED, self.Z_SPEED)
-                    publisher.publish(msg)
-            if self.SYSTEM == WorkingMode.REAL:
-                for idx, publisher in enumerate(self.twist_publishers):
-                    pos = Position()
-                    pos.x = self.saved_pos[idx][0]
-                    pos.y = self.saved_pos[idx][1]
-                    pos.z = min(self.HOOVERING_HEIGHT-self.HOOVERING_HEIGHT*(time_sec-LAND_TIME)/2, 1.)
-                    pos.yaw = 0.
-                    publisher.publish(pos)
+            is_finished = self.initiate_landing()
+            if is_finished:
+                self.get_logger().info(f'Landing completed. Shutting down node...')
+                rclpy.shutdown()
+                sys.exit(0)
+           
+        elif self.state == AgentState.READY:
+            self.run_mission()
+            
 
         else:
             raise ValueError("mode supposed to be startup or MPC")
@@ -274,10 +322,10 @@ class MPC_agents(Node):
         self.twist_publishers[idx].publish(self.full_state)
 
     def takeoff(self, targetHeight, duration, idx, groupMask=0):
-        req = Takeoff.Request()
+        req            = Takeoff.Request()
         req.group_mask = groupMask
-        req.height = targetHeight
-        req.duration = rclpy.duration.Duration(seconds=duration).to_msg()
+        req.height     = targetHeight
+        req.duration   = rclpy.duration.Duration(seconds=duration).to_msg()
         self.takeoff_services[idx].call_async(req)
 
     def setpoint_callback(self, msg):

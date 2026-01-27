@@ -23,7 +23,7 @@ class bMsg:
         self.gamma0    = np.array(gamma0)      # Gamma0 values
         self.r         = r                     # Robustness variable
         self.slack     = slack                 # Slack violation for barrier (positive if can't be fully followed)
-        self.b_vector  = b_vector              # b vector for Ax <= b (with b = b' + Ac)
+        self.b_vector  = np.array(b_vector)    # b vector for Ax <= b (with b = b' + Ac)
         self.time_grid = np.array(time_grid)   # Time grid for evaluating the barrier function
         self.task_id   = task_id               # Task ID
         self.edge_i    = edge_i                # Assigned to edge e_{ij} = x_i - x_j (i)

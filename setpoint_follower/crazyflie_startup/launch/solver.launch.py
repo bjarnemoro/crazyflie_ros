@@ -20,6 +20,14 @@ def generate_launch_description():
     # Setup project paths
     pkg_project_crazyflie_setpoint = get_package_share_directory('crazyflie_ros2_setpoint_follower')
 
+    with_rviz = DeclareLaunchArgument(
+        'rviz',
+        default_value='true',
+        choices=['true', 'false']
+    )
+
+    rviz = LaunchConfiguration('rviz')
+
     #Setup to launch a crazyflie gazebo simulation from the ros_gz_crazyflie project
     crazyflie_simulation = IncludeLaunchDescription(
        PythonLaunchDescriptionSource(
@@ -61,9 +69,21 @@ def generate_launch_description():
         ]
     )
 
+    rviz_launch = IncludeLaunchDescription(
+    PythonLaunchDescriptionSource(
+        os.path.join(
+            get_package_share_directory('crazyflie_ros2_setpoint_follower'),
+            'launch',
+            'crazyflie_rviz.launch.py'
+            )
+        ),
+    condition=IfCondition(rviz)
+    )  
+
     return LaunchDescription([
         crazyflie_simulation,
         agent_node,
         barrier_service,
-        manager_node
+        manager_node,
+        rviz_launch
         ])

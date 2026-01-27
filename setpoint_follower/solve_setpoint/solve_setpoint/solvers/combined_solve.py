@@ -64,25 +64,40 @@ class SimpleGraph:
                     self.edge_list.append(directed_edge)
 
     def find_all_cycles(self):
-        """
-        Finds all simple cycles in the graph.
-        Only the start/end node may repeat.
-        Returns a list of cycles (node lists).
-        """
         cycles = []
+        unique_cycles = set()
+
+        def get_canonical(cycle):
+            # 1. Remove the repeated end node to work with just the vertices
+            nodes = cycle[:-1]
+            # 2. Find the rotation that starts with the smallest node
+            min_idx = nodes.index(min(nodes))
+            rotated = nodes[min_idx:] + nodes[:min_idx]
+            # 3. Check both directions and pick the lexicographically smaller one
+            rev = rotated[:1] + rotated[1:][::-1]
+            return tuple(min(rotated, rev))
 
         def dfs(start, current, path):
             for neighbor in self.edges[current]:
                 if neighbor == start and len(path) > 2:
-                    cycles.append(path + [start])
+                    # Create a canonical version of the cycle to track uniqueness
+                    canonical = get_canonical(path + [start])
+                    if canonical not in unique_cycles:
+                        unique_cycles.add(canonical)
+                        cycles.append(list(canonical) + [canonical[0]])
                 elif neighbor not in path:
-                    dfs(start, neighbor, path + [neighbor])
+                    # Optimization: To avoid redundant work, only visit neighbors
+                    # with a higher index than the start node
+                    if neighbor > start: 
+                        dfs(start, neighbor, path + [neighbor])
 
-        for node in self.edges:
+        # Sort nodes to ensure a consistent starting point for the search
+        nodes = sorted(self.edges.keys())
+        for node in nodes:
             dfs(node, node, [node])
 
         return cycles
-            
+                
 def solve_task_decomposition(tasks , task_paths: list[tuple[int,int]], BOX_WEIGHT, COMM_DISTANCE, logger) -> bool:
 
     #create a list with a unique index of all agents that are used
@@ -128,6 +143,28 @@ def solve_task_decomposition(tasks , task_paths: list[tuple[int,int]], BOX_WEIGH
     # find cycles TODO: implement cycle overload
     cycles = graph.find_all_cycles()
     logger.info(f"Found {len(cycles)} cycles in the graph")
+    for cycle in cycles:
+        logger.info(f"Cycle: {cycle}")
+
+    # add constraint on the cycle
+    for cycle in cycles:
+        cycle_sum = 0
+        cycle_scale_sum = 0
+        cycle_path = [cycle[i:i+2] for i in range(len(cycle)-1)]
+
+        for edge in cycle_path:
+            u,v = edge
+            edge_vars_pair = graph.edges[u][v]
+            e_var         = edge_vars_pair[0]
+            scale_var     = edge_vars_pair[1]
+            directed_edge = edge_vars_pair[2]
+            
+            if directed_edge != (u,v):
+                e_var = -e_var
+            cycle_sum       += e_var
+            cycle_scale_sum += scale_var
+
+        constraints += [cycle_sum == 0]
 
     # define cost
     cost = 0.
@@ -177,10 +214,10 @@ def solve_task_decomposition(tasks , task_paths: list[tuple[int,int]], BOX_WEIGH
             # add the new task!
             new_task.edges        = (u,v)
             new_task.rel_position = e_value.flatten()
-            new_task.size         = scale_value 
+            new_task.size         = scale_value * task.size
             
             new_tasks.append(new_task)
             added_edges.append((u,v))
-            logger.info(f"Norm of edge {u}-{v}: {np.linalg.norm(e_value)} with scale {scale_value}")
+            logger.info(f"Norm of edge {u}-{v}: {np.linalg.norm(e_value)} with size {new_task.size}")
         
     return prob.status, new_tasks   

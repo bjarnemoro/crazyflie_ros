@@ -3,133 +3,173 @@ import cvxpy as cp
 import numpy as np
 from scipy.signal import cont2discrete
 from scipy.sparse import csc_matrix
+
 from barrier_msg.msg import Config
-
 from incorporate_barrier.bMsg import bMsg, HyperCubeHandler
-#from bMsg import bMsg, HyperCubeHandler
-
-A_s = np.array(
-    [[1,0],
-    [-1,0],
-    [0,1],
-    [0,-1]])
-
-A_s = csc_matrix(A_s)
-
-b_s = np.array([[1, 1, 1, 1]]).T
 
 
 class MPCsolver:
-    def __init__(self):
-        self.solver = cp.CLARABEL
+    def __init__(
+        self,
+        num_agents: int,
+        agents_dim: int,
+        dt: float,
+        horizon: int,
+        max_input: float,
+    ):
+        self.solver      = cp.CLARABEL
         self.initialized = False
+        self.dt          = dt
+        self.horizon     = horizon
+        self.max_input   = max_input
 
-    def initialize_problem(self, horizon, t0, squares: list[HyperCubeHandler], agents: list[int], dt, MAX_INPUT):
-        self.initialized = True
-        DIM = len(squares[0].compute_offset_vector(0))//2
+        self.states_dim      = agents_dim
+        self.inputs_dim      = agents_dim
+        self.num_agents      = num_agents
+        self.total_state_dim = self.states_dim * self.num_agents
 
-        self.state_size = len(agents)*DIM
-        self.input_size = len(agents)*DIM
-        
-        self.u = cp.Variable((self.input_size, horizon-1))
-        self.slack = cp.Variable((self.input_size, horizon-1))
-        self.x = cp.Variable((self.state_size, horizon))
+        self.squares = []
+        self.num_tv = 0
 
-        num = (horizon-2)*len(squares)*4
-        self.b_pos = cp.Parameter((num))
-        self.x0 = cp.Parameter((self.state_size))
+        # Single-integrator dynamics
+        A = np.zeros((self.states_dim, self.states_dim))
+        B = np.eye(self.inputs_dim)
+        C = np.eye(self.states_dim)
+        D = np.zeros((self.states_dim, self.inputs_dim))
 
-        A = np.zeros((self.state_size, self.state_size))
-        B = np.eye(self.state_size)
-
-        system_discrete = cont2discrete((A, B, np.eye(4), np.zeros((4, 2))), dt)
+        system_discrete = cont2discrete((A, B, C, D), dt)
         A_d, B_d, _, _, _ = system_discrete
 
-        A_d = csc_matrix(A_d)
-        B_d = csc_matrix(B_d)
+        self.A_d = csc_matrix(A_d)
+        self.B_d = csc_matrix(B_d)
 
-        b_pos = []
-        actual_i = []
-        actual_j = []
-        ks = []
-        N = 0
-        for k in range(1, horizon-1):
-            t = k*dt + t0
-            for square in squares:
-                if square.time_grid[0] <= t < square.time_grid[1]:
-                    N += 1
+    def agent_index(self, agent_id: int):
+        return agent_id * self.states_dim
 
-                    b_vec = square.compute_offset_vector(t)#.reshape(4, 1)
-                    b_pos.append(b_vec)
+    def initialize_problem(self, squares: list[HyperCubeHandler], logger=None):
+        """
+        Each hypercube represents a constraint of the form
+        H (x_j - x_i) <= b(t)
+        """
 
-                    actual_i.append(agents.index(square.edge_i))
-                    actual_j.append(agents.index(square.edge_j))
-                    ks.append(k)
+        if len(squares) == 0:
+            raise ValueError("No time varying constraints provided to MPCsolver")
 
-        if b_pos:
-            A_big = np.zeros((num, self.state_size*horizon))
-            
-            for n, (i, j, k) in enumerate(zip(actual_i, actual_j, ks)):
-                A_big[2*DIM*n, self.state_size*k + DIM*j] = 1
-                A_big[2*DIM*n, self.state_size*k + DIM*i] = -1
-                A_big[2*DIM*n+1, self.state_size*k + DIM*j] = -1
-                A_big[2*DIM*n+1, self.state_size*k + DIM*i] = 1
-                A_big[2*DIM*n+2, self.state_size*k + DIM*j+1] = 1
-                A_big[2*DIM*n+2, self.state_size*k + DIM*i+1] = -1
-                A_big[2*DIM*n+3, self.state_size*k + DIM*j+1] = -1
-                A_big[2*DIM*n+3, self.state_size*k + DIM*i+1] = 1
+        self.initialized = True
+        self.squares = squares
+        self.num_tv = len(squares)
 
-                if DIM == 3:
-                    A_big[2*DIM*n+4, self.state_size*k + DIM*j+2] = 1
-                    A_big[2*DIM*n+4, self.state_size*k + DIM*i+2] = -1
-                    A_big[2*DIM*n+5, self.state_size*k + DIM*j+2] = -1
-                    A_big[2*DIM*n+5, self.state_size*k + DIM*i+2] = 1
+        rows_per_constraint = 2 * self.states_dim
+        nx = rows_per_constraint * self.num_tv
 
-            constraints = [self.x[:,0] == self.x0]
-            constraints += [self.x[:,1:] == A_d @ self.x[:,:-1] + B_d @ (self.u+self.slack)]
-            constraints +=  [self.u <= MAX_INPUT]
-            constraints +=  [-self.u <= MAX_INPUT]
-            constraints += [A_big @ cp.vec(self.x.T, order="C") <= self.b_pos]
+        # Decision variables
+        self.u = cp.Variable((self.inputs_dim * self.num_agents, self.horizon))
+        self.x = cp.Variable((self.total_state_dim, self.horizon + 1))
+        self.x0 = cp.Parameter(self.total_state_dim)
 
-            objective = cp.Minimize(cp.sum_squares(self.u) + 1e3*cp.sum_squares(self.slack)+cp.sum_squares(cp.vec(self.u[:,1:], order="C")-cp.vec(self.u[:,:-1], order="C")))
-            self.prob = cp.Problem(objective, constraints)
+        # Time-varying constraint data
+        self.slack = cp.Variable((nx, self.horizon + 1), nonneg=True)
+        self.b_offset = cp.Parameter((nx, self.horizon + 1))
 
+        constraints = []
+
+        # Dynamics + input bounds
+        for k in range(self.horizon):
+            for i in range(self.num_agents):
+                idx = self.agent_index(i)
+
+                x_k    = self.x[idx : idx + self.states_dim, k]
+                x_next = self.x[idx : idx + self.states_dim, k + 1]
+                u_k    = self.u[idx : idx + self.inputs_dim, k]
+
+                constraints += [
+                    x_next == self.A_d @ x_k + self.B_d @ u_k,
+                    u_k <= self.max_input,
+                    -u_k <= self.max_input,
+                ]
+
+        # Initial condition
+        constraints += [self.x[:, 0] == self.x0]
+        H = np.array([[1., 0], 
+                      [-1., 0], 
+                      [0, 1.], 
+                      [0, -1.]])
+
+        # Time-varying relative constraints
+        logger.info(f"Number of time-varying constraints: {len(self.squares)}")
+        for k in range(self.horizon + 1):
+            row = 0
+
+            for qq,square in enumerate(self.squares):
+                agent_i = square.edge_i - 1
+                agent_j = square.edge_j - 1
+                
+                C = relative_matrix(self.states_dim,self.num_agents,agent_j, agent_i)
+
+                A_block = H @ C
+                
+                constraints += [
+                    A_block @ self.x[:, k] <= self.b_offset[qq*rows_per_constraint :qq*rows_per_constraint + rows_per_constraint, k] + self.slack[qq*rows_per_constraint :qq*rows_per_constraint + rows_per_constraint, k]
+                ]
+
+        # Objective
+        objective = cp.Minimize(1e3 * cp.sum_squares(self.slack) +  cp.sum_squares(self.u))
+
+        self.prob = cp.Problem(objective, constraints)
+
+    def solve(self, x0, t0, return_val="u0",logger=None):
+        if not self.initialized:
+            raise RuntimeError("MPCsolver not initialized")
         
-    def recompute(self, horizon, x0, t0, squares: list[HyperCubeHandler], dt, return_val):
-        assert self.initialized
+        b_mat = []
+        for k in range(self.horizon + 1):
+            t = k * self.dt + t0
+            b_vec = []
 
-        DIM = len(squares[0].compute_offset_vector(0))//2
-        b_pos = []
-
-        for k in range(1, horizon-1):
-            t = k*dt + t0
-            for square in squares:
+            for square in self.squares:
                 if square.time_grid[0] <= t < square.time_grid[1]:
-                    b_vec = square.compute_offset_vector(t)
-                    b_pos.append(b_vec)
+                    # b_vec.append(square.compute_offset_vector(t).reshape(-1,1))
+                    b_vec.append(square.b_vector.reshape(-1,1))
                 else:
-                    b_pos.append(square.compute_offset_vector(square.time_grid[1]-0.01)+np.ones(DIM*2)*0.02)
+                    # b_vec.append(square.compute_offset_vector(square.time_grid[1]).reshape(-1,1))
+                    b_vec.append(square.b_vector.reshape(-1,1))
+            
+            b_mat.append(np.vstack(b_vec))
 
-        if b_pos:
-            b_stack = np.hstack(b_pos)
+        self.b_offset.value = np.hstack(b_mat)
+        # if logger is not None:
+        #     logger.info(f"b_offset value:\n{np.hstack(b_mat)}")
 
-            self.b_pos.value = b_stack
-            self.x0.value = x0
+        self.x0.value = x0
 
-            self.prob.solve(solver=self.solver, warm_start=True)
+        self.prob.solve(solver=self.solver, warm_start=True)
 
-            if return_val == "pos":
-                return self.x.value[:self.state_size].T
-            if return_val == "x_next":
-                return self.x.value[:,1]
-            elif return_val == "u0":
-                return self.u.value[:,0]
+        if return_val == "x_next":
+            return self.x.value[:, 1]
+        elif return_val == "u0":
+            return self.u.value[:, 0]
+        else:
+            raise ValueError("return_val must be 'x_next' or 'u0'")
+
+    def __call__(self, x0, t0, return_val="u0",logger=None):
+        res = self.solve(x0, t0, return_val,logger)
+        # if logger is not None:
+        #     logger.info(f"slack value:\n{self.slack.value}")
+        return res
 
 
+def relative_matrix(agent_dim, num_agents, index_j, index_i):
 
-def main():
-    pass
+    """
+    Returns matrix C such that C @ x = x_j - x_i
+    where x is the stacked state of all agents.
+    """
+    C = np.zeros((agent_dim, agent_dim * num_agents))
 
+    j_start = index_j * agent_dim
+    i_start = index_i * agent_dim
 
-if __name__ == "__main__":
-    main()
+    C[:, j_start:j_start + agent_dim] = np.eye(agent_dim)
+    C[:, i_start:i_start + agent_dim] = -np.eye(agent_dim)
+
+    return C

@@ -54,6 +54,7 @@ class Manager(Node):
 
         ##
         self.start_time = None
+        self.ready_count = 0
 
         #setup the tasks that are to be done
         self.tasks, self.periods = self._load_tasks()
@@ -249,7 +250,10 @@ class Manager(Node):
                 self.get_logger().info(f"Waiting for odom messages from agents: {missing_agents}")
 
         elif self.manager_state == ManagerState.READY and self.agent_state == AgentState.READY:
-            self.get_logger().info(f"Ready to starting the mission!")
+
+            if self.ready_count % 60 == 0:
+                self.get_logger().info(f"{AnsiColor.GREEN} MPC currently working. {AnsiColor.RESET}")
+            self.ready_count += 1
             
             if self.start_time is None: # time is considered since the start of the mission
                 self.start_time = self.get_clock().now()
