@@ -9,6 +9,7 @@ from geometry_msgs.msg import Point
 
 from std_msgs.msg import Int32MultiArray
 from msg_interface.msg import TaskEdge, TaskEdgeList
+from barrier_msg.msg import TMsglist
 
 def line_strip(time, marker_id, pos1, pos2, color):
     marker = Marker()
@@ -112,6 +113,7 @@ class GraphMarkerPublisher(Node):
         self.declare_parameter("SPEED", 0.4)
         self.declare_parameter("AGENT_TIMER", 0.1)
         self.declare_parameter("HOOVERING_HEIGHT",1.0)
+        self.declare_parameter("COMM_DISTANCE", 1.0)
 
         self.robot_prefix = self.get_parameter('robot_prefix').value
         self.SYSTEM = self.get_parameter("SYSTEM").value
@@ -120,6 +122,7 @@ class GraphMarkerPublisher(Node):
         self.NUM_AGENTS = self.get_parameter("NUM_AGENTS").value
         self.AGENT_TIMER = self.get_parameter("AGENT_TIMER").value
         self.HOOVERING_HEIGHT = self.get_parameter("HOOVERING_HEIGHT").value
+        self.COMM_DISTANCE = self.get_parameter("COMM_DISTANCE").value
 
         self.publisher = self.create_publisher(MarkerArray, 'visualization_marker', 10)
         self.task_publisher = self.create_publisher(MarkerArray, 'task_visualization_marker', 10)
@@ -136,80 +139,55 @@ class GraphMarkerPublisher(Node):
 
         self.drone_pos = np.zeros((self.NUM_AGENTS, 3))
         self.edges = []
-        self.task_edges = []
+        self.task_msgs = []
         self.prev_marker_count = 0
         self.prev_edge_count = 0
+        self.prev_edges = []
 
         self.create_subscription(Int32MultiArray, "/graph_edges", self.set_edges, 10)
-        self.create_subscription(TaskEdgeList, "/task_edges", self.set_task, 10)
+        self.create_subscription(TMsglist, "/task_edges", self.set_task, 10)
+        self.markers_id_dict = {}
+        self.marker_id = 0
 
     def timer_callback(self):
         marker_array = MarkerArray()
-        marker_id = 0
+        #add lines where needed
+        for edge in self.edges:
+            
+            marker_id_edge = self.markers_id_dict.get(edge, None)
+            if marker_id_edge is None:
+                marker_id_edge = self.marker_id
+                self.markers_id_dict[edge] = marker_id_edge
+                self.marker_id += 1
+            
+            time   = self.get_clock().now().to_msg()
+            pos1   = self.drone_pos[edge[0]-1] # -1 for 0-based indexing
+            pos2   = self.drone_pos[edge[1]-1] # -1 for 0-based indexing
+            color  = [1.0, 0.0, 0.0]
+            marker = line_strip(time, marker_id_edge, pos1, pos2, color)
+            marker_array.markers.append(marker)
 
-        #draw all the edges between the communication graph, delete the ones that are supposed to dissapear
-        for i in range(max(len(self.edges), self.prev_edge_count)):
-            if marker_id < len(self.edges):
+        for edge in self.markers_id_dict:
+            if edge not in self.edges:
+                marker_id_edge = self.markers_id_dict[edge]
                 time = self.get_clock().now().to_msg()
-                pos1 = self.drone_pos[self.edges[i][0]-1] # -1 for 0-based indexing
-                pos2 = self.drone_pos[self.edges[i][1]-1] # -1 for 0-based indexing
-                color = [1.0, 0.0, 0.0]
-                marker = line_strip(time, marker_id, pos1, pos2, color)
-
+                marker = delete_strip(time, marker_id_edge)
                 marker_array.markers.append(marker)
-                marker_id += 1
-            else:
-                time = self.get_clock().now().to_msg()
-                marker = delete_strip(time, marker_id)
-
-                marker_array.markers.append(marker)
-                marker_id += 1
-
+  
         self.publisher.publish(marker_array)
 
-        self.prev_edge_count = len(self.edges)
-
-        marker_array = MarkerArray()
-        marker_id = 0
-
-        for i in range(max(len(self.task_edges), self.prev_marker_count)):
-            if marker_id < len(self.task_edges)*2:
-                time = self.get_clock().now().to_msg()
-
-                edge = self.task_edges[i]
-                pos1 = self.drone_pos[edge.start_idx]
-                pos2 = self.drone_pos[edge.start_idx]+np.array([edge.agent_x, edge.agent_y, edge.agent_z])
-                color = [0.0, 1.0, 0.0]
-                marker = line_strip(time, marker_id, pos1, pos2, color)
-
-                marker_array.markers.append(marker)
-                marker_id += 1
-
-                pos = self.drone_pos[edge.end_idx]
-                marker = sphere(time, marker_id, pos, color)
-                marker_array.markers.append(marker)
-                marker_id += 1
-
-            else:
-                for _ in range(2):
-                    time = self.get_clock().now().to_msg()
-                    
-                    marker = delete_strip(time, marker_id)
-
-                    marker_array.markers.append(marker)
-                    marker_id += 1
+        # TODO: add the task marker logic
 
         ## add marker for each agent 
         for i in range(self.NUM_AGENTS):
             time = self.get_clock().now().to_msg()
             pos = self.drone_pos[i] + np.array([0.0, 0.0, 0.2])
             color = [0.0, 0.0, 1.0]
-            marker = text_marker(time, marker_id, pos, i+1, color)
+            marker = text_marker(time, i, pos, i+1, color)
             marker_array.markers.append(marker)
-            marker_id += 1
 
         self.task_publisher.publish(marker_array)
-        self.prev_marker_count = len(self.task_edges)
+        self.prev_marker_count = len(self.task_msgs)
 
     def pos_callback(self, msg, idx):
         self.drone_pos[idx][0] = msg.pose.pose.position.x
@@ -218,11 +196,13 @@ class GraphMarkerPublisher(Node):
 
     def set_edges(self, msg):
         data = msg.data
-        self.edges = [(data[i], data[i+1]) for i in range(0, len(data), 2)]
+        self.edges = [tuple(sorted((data[i], data[i+1]))) for i in range(0, len(data), 2)]
 
     def set_task(self, msg):
-        data = msg.task_list
-        self.task_edges = data
+        self.task_msgs = msg.messages
+
+    def set_main_agents(self, msg):
+        self.main_agents = msg
 
 def signal_handler(sig, frame):
     print("Shutdown signal received, cleaning up...")

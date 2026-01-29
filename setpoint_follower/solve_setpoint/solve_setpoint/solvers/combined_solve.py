@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from collections import defaultdict
 import copy
+from solve_setpoint.task_manager import Task
 
 
 def get_H_and_b(box_dim):
@@ -55,8 +56,8 @@ class SimpleGraph:
 
         for task, path in zip(tasks, task_paths):
             for jj,edge in enumerate(path):
-                u,v            = edge
-                directed_edge = (u,v) # it is important to give the same direction to the edge
+                u,v           = edge
+                directed_edge = [u,v] # it is important to give the same direction to the edge
 
                 if not len(self.edges[u][v]): # only add the task once
                     self.edges[u][v] = [edge_vars[task][jj], scale_vars[task][jj], directed_edge]
@@ -125,8 +126,8 @@ def solve_task_decomposition(tasks , task_paths: list[tuple[int,int]], BOX_WEIGH
             
             e_var         = edge_vars_pair[0]
             scale_var     = edge_vars_pair[1]
-            directed_edge = edge_vars_pair[2]
-            if directed_edge != (u,v): # invert direction if you traverse the edge backwards
+            u1,v1         = edge_vars_pair[2]
+            if (u1,v1) != (u,v):
                 e_var = -e_var
             
             e_sum     += e_var
@@ -157,9 +158,9 @@ def solve_task_decomposition(tasks , task_paths: list[tuple[int,int]], BOX_WEIGH
             edge_vars_pair = graph.edges[u][v]
             e_var         = edge_vars_pair[0]
             scale_var     = edge_vars_pair[1]
-            directed_edge = edge_vars_pair[2]
+            u1,v1         = edge_vars_pair[2]
             
-            if directed_edge != (u,v):
+            if (u1,v1) != (u,v):
                 e_var = -e_var
             cycle_sum       += e_var
             cycle_scale_sum += scale_var
@@ -196,28 +197,32 @@ def solve_task_decomposition(tasks , task_paths: list[tuple[int,int]], BOX_WEIGH
         for edge in path:
             
             u,v = edge
-            edge_vars_pair = graph.edges[u][v]
-            
-            e_var     =   edge_vars_pair[0]
-            scale_var = edge_vars_pair[1]
-
-            e_value     = e_var.value
-            scale_value = scale_var.value
-            if edge != (u,v): # invert direction if you traverse the edge backwards
-                e_value = -e_value
             
             if (u,v) in added_edges or (v,u) in added_edges:
                 continue # do not add the task twice
             
-            new_task = copy.deepcopy(task)
+
+            edge_vars_pair = graph.edges[u][v]
             
-            # add the new task!
-            new_task.edges        = (u,v)
-            new_task.rel_position = e_value.flatten()
-            new_task.size         = scale_value * task.size
+            e_var         = edge_vars_pair[0]
+            scale_var     = edge_vars_pair[1]
+            u1,v1         = edge_vars_pair[2]
+
+            e_value     = e_var.value
+            scale_value = scale_var.value
+
+            if (u,v) != (u1,v1) : # invert direction if you traverse the edge backwards
+                e_value = -e_value
+            
+            new_task = Task(
+                edges        = [u,v],
+                rel_position = e_value.flatten(),
+                size         = scale_value * task.size,
+                timespan     = task.timespan,
+                period_num   = task.period_num
+            )
+            
             new_tasks.append(new_task)
             added_edges.append((u,v))
-            
-            logger.debug(f"edge {u}-{v}: rel pos {e_value} with size {new_task.size}")
         
     return prob.status, new_tasks   

@@ -154,7 +154,7 @@ def decomposition_path_guesses(inconsistent_tasks : list[Task], graph : dict[dic
     """
     
 
-    logger.error("Number of inconsistent tasks: {}".format(len(inconsistent_tasks)))
+    logger.debug("Number of inconsistent tasks: {}".format(len(inconsistent_tasks)))
     paths_dict   = {} # for each task it contains a list of possible valid decomposition paths
     is_feasible  = True
     total_cost   = 0.

@@ -119,7 +119,7 @@ class MPCsolver:
                 constraints += [ cp.sum_squares(C @ self.x[:, k]) <= self.communication_distance**2 + self.comm_slack[k] ]
 
         # Objective
-        objective = cp.Minimize(1e3 * cp.sum_squares(self.task_slack) +  cp.sum_squares(self.u) + 1e3 * cp.sum_squares(self.comm_slack))
+        objective = cp.Minimize(1e3 * cp.sum_squares(self.task_slack) +  cp.sum_squares(self.u) + 1e1 * cp.sum_squares(self.comm_slack))
 
         self.prob = cp.Problem(objective, constraints)
 

@@ -10,7 +10,7 @@ from geometry_msgs.msg import PoseStamped
 from geometry_msgs.msg import Twist
 from crazyflie_interfaces.msg import Position, FullState
 from rclpy.executors import MultiThreadedExecutor
-from std_msgs.msg import Int32
+from std_msgs.msg import Int32, Bool
 
 from barrier_msg.msg import BMsg, BMsglist
 from solve_setpoint.bMsg import bMsg, HyperCubeHandler
@@ -53,8 +53,9 @@ class MPC_agents(Node):
 
         self.barrier_callback     = self.create_subscription(BMsglist, "/barriers", self.on_barrier_message, 10)
         self.state_publisher      = self.create_publisher(Int32, "/agent_state", 10)
-        self.landing_command_sub  = self.create_subscription(Int32, "/landing_command", self.landing_command_callback, 10)
-        self.gather_command_sub   = self.create_subscription(Int32, "/gather_command", self.on_gather_callback, 10)
+        self.landing_command_sub  = self.create_subscription(Bool, "/landing_command", self.landing_command_callback, 10)
+        self.gather_command_sub   = self.create_subscription(Bool, "/gather_command", self.on_gather_callback, 10)
+        self.stop_command_sub     = self.create_subscription(Bool, "/stop_mpc", self.on_stop, 10)
 
         if self.SYSTEM == WorkingMode.SIM:
             self.drones = ['{}{}'.format(self.robot_prefix, i) for i in range(1,self.NUM_AGENTS+1)]
@@ -119,22 +120,26 @@ class MPC_agents(Node):
         self.start_set = False
         self.land_pos  = None
         self.get_logger().info('Finish startup')
+        self.stop_mpc  = False
+
+    def on_stop(self, msg):
+        if msg.data == True:
+            if self.state != AgentState.STOP:
+                self.get_logger().info(f'{AnsiColor.RED} Received STOP command... {AnsiColor.RESET}')
+                self.state = AgentState.STOP
+                self.timer.cancel()
 
     def landing_command_callback(self, msg):
-        if msg.data == 1:
+        if msg.data == True:
             if self.state != AgentState.LANDING:
                 self.get_logger().info(f'{AnsiColor.BLUE} Received landing command. Switching to LANDING state... {AnsiColor.RESET}')
                 self.state = AgentState.LANDING
-        else:
-            self.get_logger().info(f'Received invalid landing command. Message discarded...')
 
     def on_gather_callback(self, msg):
-        if msg.data == 1:
+        if msg.data == True:
             if self.state != AgentState.GATHERING:
                 self.get_logger().info(f'{AnsiColor.BLUE} Received gathering command. Switching to GATHERING state... {AnsiColor.RESET}')
                 self.state = AgentState.GATHERING
-        else:
-            self.get_logger().info(f'Received invalid gathering command. Message discarded...')
 
     def odom_callback(self, msg, idx):
         if type(msg) == Odometry:
@@ -157,11 +162,11 @@ class MPC_agents(Node):
 
 
     def on_barrier_message(self, msg):
-        self.get_logger().info(f"Received Incoming barrier function messages. Starting MPC mode")
+        self.get_logger().info(f"{AnsiColor.BLUE}Received new incoming barrier function messages. Starting MPC mode{AnsiColor.RESET}")
 
         ## the state must be ready before it is possible to start 
         if self.state !=  AgentState.READY :
-            self.get_logger().info(f"Not ready to start the mission. Message discarded...")
+            self.get_logger().info(f"{AnsiColor.BLUE}Not ready to start the mission. Message discarded...{AnsiColor.RESET}")
 
         self.barriers = []
         for bmsg in msg.messages:
@@ -245,13 +250,13 @@ class MPC_agents(Node):
             self.start_mission_time = self.get_clock().now()
 
         if not self.mpc_solver.initialized :
-            self.get_logger().info(f"MPC solver not initialized yet. Waiting for barrier messages...")
+            self.get_logger().info(f"MPC solver not initialized yet. Waiting for barrier messages...",throttle_duration_sec=3.0)
             self.start_mission_time = self.get_clock().now() # reset time until system is ready to start
             return
         
         self.time = self.get_clock().now() - self.start_mission_time
         time_sec = self.time.nanoseconds / 1e9
-        self.get_logger().info(f"{AnsiColor.BLUE} Running MPC mission... Time elapsed: {time_sec:.2f}s {AnsiColor.RESET}", throttle_duration_sec=2.0)
+        self.get_logger().info(f"{AnsiColor.BLUE} Running MPC mission... Time elapsed: {time_sec:.2f}s {AnsiColor.RESET}",throttle_duration_sec=5.0)
 
         if self.DIM == 2:
             x0 = self.pos[:,:2].flatten()
@@ -294,6 +299,8 @@ class MPC_agents(Node):
         self.time      = self.get_clock().now() - self.start_time
         self.state_publisher.publish(Int32(data=int(self.state)))
 
+        self.get_logger().info(f"{AnsiColor.BLUE}MPC STATE: {self.state.name} {AnsiColor.RESET}", throttle_duration_sec=3.0)
+
         if self.land_pos is None:
             self.land_pos = self.pos.copy()
 
@@ -312,9 +319,6 @@ class MPC_agents(Node):
         elif self.state == AgentState.READY:
             self.run_mission()
             
-
-        else:
-            raise ValueError("mode supposed to be startup or MPC")
         
     def update_full_state(self, twist, idx):
         self.full_state = FullState()
@@ -367,11 +371,7 @@ def main(args=None):
     signal.signal(signal.SIGTERM, signal_handler)
 
     agents = MPC_agents()
-
-    executor = MultiThreadedExecutor()
-    executor.add_node(agents)
-
-    executor.spin()
+    rclpy.spin(agents)
 
     agents.destroy_node()
     rclpy.shutdown()

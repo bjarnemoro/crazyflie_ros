@@ -7,11 +7,11 @@ from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Int32MultiArray
-from std_msgs.msg import Int32
+from std_msgs.msg import Int32, Bool
 from rclpy.executors import MultiThreadedExecutor
-from msg_interface.msg import TaskEdge, TaskEdgeList
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from barrier_msg.srv import BCompSrv
-from barrier_msg.msg import BMsg, TMsg, BMsglist
+from barrier_msg.msg import BMsg, TMsg, BMsglist, TMsglist
 
 from solve_setpoint.bMsg import bMsg, HyperCubeHandler
 from solve_setpoint.graph_manager import GraphManager
@@ -55,6 +55,7 @@ class Manager(Node):
         ##
         self.start_time = None
         self.ready_count = 0
+        self.current_tasks = []
 
         #setup the tasks that are to be done
         self.tasks, self.periods = self._load_tasks()
@@ -86,11 +87,12 @@ class Manager(Node):
             raise ValueError(f"The specified working mode {self.SYSTEM} is not valid. Choose 1 for real robots and 0 for simulation.")
         
         
-        self.odom_subscribers = []
-        self.edge_publisher   = self.create_publisher(Int32MultiArray, "/graph_edges", 10)
-        self.task_publisher   = self.create_publisher(TaskEdgeList, "/task_edges", 10)
-        self.landing_command_pub  = self.create_publisher(Int32, "/landing_command", 10)
-        self.gather_command_pub   = self.create_publisher(Int32, "/gather_command", 10)
+        self.odom_subscribers     = []
+        self.edge_publisher       = self.create_publisher(Int32MultiArray, "/graph_edges", 10)
+        self.task_publisher       = self.create_publisher(TMsglist, "/task_edges", 10)
+
+        self.landing_command_pub  = self.create_publisher(Bool, "/landing_command", 10)
+        self.gather_command_pub   = self.create_publisher(Bool, "/gather_command", 10)
         self.agent_state_sub      = self.create_subscription(Int32, "/agent_state", self.on_agent_message, 10)
 
         self.barrier_client = self.create_client(BCompSrv, '/compute_barriers')
@@ -120,15 +122,12 @@ class Manager(Node):
 
     def on_new_barrier(self, future):
         try:
-            self.msgs = []
             response = future.result()
-
             msg = BMsglist()
             msg.messages.extend(response.messages)
             self.barrier_publisher.publish(msg)
-
         except Exception as e:
-            self.get_logger().info(f"Service call failed: {e}", )
+            self.get_logger().error(f"Service call failed: {e}")
 
     def on_agent_message(self,msg):
         if msg.data == AgentState.TAKEOFF:
@@ -142,7 +141,14 @@ class Manager(Node):
         elif msg.data == AgentState.LANDING:
             # Logic for descending and disarming
             self.agent_state = AgentState.LANDING
-            
+
+        elif msg.data == AgentState.GATHERING:
+            self.get_logger().error("Not implemented action upon agent state Gathering.")
+            self.agent_state = AgentState.LANDING
+
+        elif msg.data == AgentState.STOP:
+            self.agent_state = AgentState.STOP
+
         else:
             self.get_logger().info("Error: Unknown Agent State.")
 
@@ -169,7 +175,7 @@ class Manager(Node):
         # Check if it is time for the recalulcation     
         if len(self.recalc_times) == 0:
             self.get_logger().info(f"{AnsiColor.BOLD_GREEN} All tasks concluded. Sending landing command {AnsiColor.RESET}",throttle_duration_sec=5.0)
-            self.landing_command_pub.publish(Int32(data=1))
+            self.landing_command_pub.publish(Bool(data=True))
             return    
         
         if current_time > self.recalc_times[0]:
@@ -180,29 +186,37 @@ class Manager(Node):
                                     f".Remaining recalculation times: {self.recalc_times} {AnsiColor.RESET}")
         
         if communication_graph_changed:
-            self.recalculate_tasks(current_time)
-            self.get_logger().info(f"{AnsiColor.BOLD_GREEN} Recaculating task  after communication graph changed {AnsiColor.RESET}")
+            is_critical = False
+            for task in self.current_tasks:
+                u,v = task.edges
+                if (u,v) not in self.graph_manager.get_edge() and (v,u) not in self.graph_manager.get_edge():
+                   is_critical = True
+                   self.recalculate_tasks(current_time)
+                   self.get_logger().info(f"{AnsiColor.BOLD_GREEN} Recaculating task  after communication graph changed, affecting current tasks {AnsiColor.RESET}")
+                   break
+            if not is_critical:
+                self.get_logger().info(f"{AnsiColor.BOLD_GREEN} Non critical graph change. Tasks are not recomputed {AnsiColor.RESET}")
+            
        
-        #publish task data for the graph_rviz script if active
-        # if self.is_rviz_node_connected():
-        #     tasks = self.task_manager.get_tasks(self.total_elapsed)
+        # publish task data for the graph_rviz script if active
+        if self.is_rviz_node_connected():
 
-        #     msg = TaskEdgeList()
-        #     for task in tasks:
-        #         task_edge = TaskEdge()
-        #         task_edge.start_idx = task[0][0]
-        #         task_edge.end_idx = task[0][1]
-        #         task_edge.agent_x = float(task[1][0])
-        #         task_edge.agent_y = float(task[1][1])
-        #         if self.DIM==2:
-        #             task_edge.agent_z = 0.
-        #         else:
-        #             task_edge.agent_z = float(task[1][2])
+            msgs = TMsglist()
+            for task in self.current_tasks:
+                msg = self.task_manager.get_tmsg(task)
+                msgs.messages.append(msg)
 
-        #         msg.task_list.append(task_edge)
-
-        #     self.task_publisher.publish(msg)
+            self.task_publisher.publish(msgs)
     
+
+    def request_barrier(self, tasks):
+        req = BCompSrv.Request()
+        for task in tasks:
+            req.messages.append(self.task_manager.get_tmsg(task))
+
+        future = self.barrier_client.call_async(req)
+        future.add_done_callback(self.on_new_barrier)
+
 
 
     def recalculate_tasks(self, current_time):
@@ -211,32 +225,28 @@ class Manager(Node):
         
         comm_graph = self.graph_manager.get_comm_graph()
         comm_edges = self.graph_manager.get_edge()
-        self.get_logger().info(f"{AnsiColor.BOLD_GREEN} Current communication edges: {comm_edges} {AnsiColor.RESET}")
+        self.get_logger().debug(f"{AnsiColor.BOLD_GREEN} Current communication edges: {comm_edges} {AnsiColor.RESET}")
 
-        tasks, possible_task_paths = self.task_manager.obtain_current_tasks(current_time, comm_edges, self.get_logger())
-        self.get_logger().info(f"Found {len(possible_task_paths)} possible decompositions")
+        tasks, possible_task_paths, decomposition_needed = self.task_manager.obtain_current_tasks(current_time, comm_edges, self.get_logger())
 
-        ## try all possible decomposition until you find one that is feasible
+        if not decomposition_needed:
+            self.current_tasks = tasks
+            self.request_barrier(tasks)
+
         for jj,task_paths in enumerate(possible_task_paths,start=1) :
 
             cvx_status, new_tasks = solve_task_decomposition(tasks, task_paths,self.BOX_WEIGHT, self.COMM_DISTANCE, self.get_logger())
-            
             if cvx_status == "optimal" : 
                 #compute the barrier function
                 self.get_logger().info(f"{AnsiColor.BOLD_GREEN} All tasks can be decomposed successfully!{AnsiColor.RESET}")
-                
-                self.req = BCompSrv.Request()
-                tmsg_list = []
-                for task in new_tasks:
-                    tmsg_list.append(self.task_manager.get_tmsg(task))
-
-                self.req.messages.extend(tmsg_list)
-                future = self.barrier_client.call_async(self.req)
-                future.add_done_callback(self.on_new_barrier)
+                self.current_tasks = new_tasks
+                self.request_barrier(new_tasks)
                 return 
+                
             else:
                 self.get_logger().info(f"{AnsiColor.BOLD_YELLOW} Decomposition attempt {jj} out of {len(possible_task_paths)} failed. Solver returned status: {cvx_status}. Trying another decomposition... {AnsiColor.RESET}")
 
+        
         self.get_logger().error("All task decomposition attempts failed. No feasible solution found for the current communication graph.")
 
     def mainloop(self):
@@ -268,6 +278,9 @@ class Manager(Node):
             
             comm_graph_changed = self.update_and_publish_communication_graph()
             self.update_and_publish_task_graph(current_time,comm_graph_changed)
+
+        elif self.agent_state == AgentState.STOP :
+            self.get_logger().info(f"{AnsiColor.BOLD_GREEN} MPC externally stopped . {AnsiColor.RESET}",throttle_duration_sec=5.0)
 
     def _load_tasks(self):
         """
@@ -352,10 +365,9 @@ def main(args=None):
     signal.signal(signal.SIGTERM, signal_handler)
 
     manager = Manager()
-    #executor so subcriptions and publishers can use mutliple threads
-    executor = MultiThreadedExecutor()
-    executor.add_node(manager)
-    executor.spin()
+
+    rclpy.spin(manager)
+    manager.destroy_node()
     rclpy.shutdown()
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ class AgentState(IntEnum):
     READY     = 1
     LANDING   = 2
     GATHERING = 3
+    STOP      = 4
 
 class WorkingMode(IntEnum):
     """Defines if the code is launched from simulation or from the real crazyflie"""
