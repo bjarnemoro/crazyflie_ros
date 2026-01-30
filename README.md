@@ -2,7 +2,7 @@
 ### setup
 ros dependencies
 ```
-ros2: jazzy
+ros2: humble/jazzy
 gazebo: Gazebo Sim, version 8.10.0
 ```
 
@@ -30,24 +30,59 @@ visualization_msgs==5.3.6
 ```
 
 ### installation
-clone the repository, note that the submodules are not on the main branch
-```
-git clone --recursive https://github.com/bjarnemoro/crazyflie_ros.git
-```
-build the crazyflie_ros directory
-```
-colcon build --symlink-install
+
+Create a new ROS 2 workspace:
+
+``` bash
+mkdir -p ros_ws/src
 ```
 
-### running
-you can run the main simulation in gazebo
+Install this repository and the crazyswarm2 library:
+
+```bash
+Copy code
+cd ros_ws/src
+git clone --recursive https://github.com/bjarnemoro/crazyflie_ros.git
+git clone --recursive https://github.com/IMRCLab/crazyswarm2.git
 ```
-ros2 launch crazyflie_ros2_setpoint_follower solver.launch.py 
+
+Install the motion capture tracking dependencies:
+
+```bash
+Copy code
+sudo apt-get install ros-${ROS_DISTRO}-motion-capture-tracking
+sudo apt-get install ros-${ROS_DISTRO}-tf-transformations
 ```
-for additional visualization of the graphs and tasks in rviz rn
+Install the cflib Python dependencies:
+
+```bash
+Copy code
+pip3 install cflib transforms3d
 ```
-ros2 launch crazyflie_ros2_setpoint_follower crazyflie_rviz.launch.py 
+
+If you encounter errors related to the crazyswarm2 library, please refer to the crazyswarm2 [installation guide](https://imrclab.github.io/crazyswarm2/installation.html).
+
+If everything looks good, build the workspace:
+
+```bash
+Copy code
+cd ..
+colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 ```
+
+### Running Simulation
+you can run the main simulation in gazebo with rviz
+```
+ros2 launch crazyflie_ros2_setpoint_follower solver.launch.py  rviz:=true
+```
+
+you can store you mission in a config file like the ones stored in ´setpoint_follower/crazyflie_startup/config´ folder. Then you can start your personalized mission as 
+
+```
+ros2 launch crazyflie_ros2_setpoint_follower solver.launch.py  rviz:=true mission_yaml:=ABC.yaml
+```
+
+### Running Hardware Experiment
 
 The real world file is currently missing however in order to run that you connect to the crazyflie using the crazyswarm library
 ```
