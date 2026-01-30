@@ -88,14 +88,15 @@ class Manager(Node):
         
         
         self.odom_subscribers     = []
-        self.edge_publisher       = self.create_publisher(Int32MultiArray, "/graph_edges", 10)
-        self.task_publisher       = self.create_publisher(TMsglist, "/task_edges", 10)
+        self.edge_pub                = self.create_publisher(Int32MultiArray, "/graph_edges", 10)
+        self.active_agents_pub       = self.create_publisher(Int32MultiArray, "/active_agents", 10)
+        self.task_pub                = self.create_publisher(TMsglist, "/task_edges", 10)
 
         self.landing_command_pub  = self.create_publisher(Bool, "/landing_command", 10)
         self.gather_command_pub   = self.create_publisher(Bool, "/gather_command", 10)
         self.agent_state_sub      = self.create_subscription(Int32, "/agent_state", self.on_agent_message, 10)
 
-        self.barrier_client = self.create_client(BCompSrv, '/compute_barriers')
+        self.barrier_client       = self.create_client(BCompSrv, '/compute_barriers')
         while not self.barrier_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('service not available, waiting again...')
 
@@ -111,8 +112,6 @@ class Manager(Node):
 
         #start the main loops of the system with a timer method
         self.timer = self.create_timer(self.MAIN_TIMER, self.mainloop)
-        self.once = True
-        self.counter = 0
             
         #set the starting state
         self.manager_state = ManagerState.WAITING_FOR_ODOMETRY
@@ -143,8 +142,7 @@ class Manager(Node):
             self.agent_state = AgentState.LANDING
 
         elif msg.data == AgentState.GATHERING:
-            self.get_logger().error("Not implemented action upon agent state Gathering.")
-            self.agent_state = AgentState.LANDING
+            self.agent_state = AgentState.GATHERING
 
         elif msg.data == AgentState.STOP:
             self.agent_state = AgentState.STOP
@@ -153,7 +151,7 @@ class Manager(Node):
             self.get_logger().info("Error: Unknown Agent State.")
 
     def is_rviz_node_connected(self):
-        return self.edge_publisher.get_subscription_count() > 0 and self.task_publisher.get_subscription_count() > 0
+        return self.edge_pub.get_subscription_count() > 0 and self.task_pub.get_subscription_count() > 0
 
     def update_and_publish_communication_graph(self):
         
@@ -166,7 +164,7 @@ class Manager(Node):
         if self.is_rviz_node_connected():
             msg = Int32MultiArray()
             msg.data = [i for pair in self.graph_manager.get_edge() for i in pair]
-            self.edge_publisher.publish(msg) # publish for rviz
+            self.edge_pub.publish(msg) # publish for rviz
         
         return changed
 
@@ -201,12 +199,11 @@ class Manager(Node):
         # publish task data for the graph_rviz script if active
         if self.is_rviz_node_connected():
 
-            msgs = TMsglist()
-            for task in self.current_tasks:
-                msg = self.task_manager.get_tmsg(task)
-                msgs.messages.append(msg)
+            msg = Int32MultiArray()
+            msg.data = self.task_manager.get_active_agents(current_time)
+            self.active_agents_pub.publish(msg)
 
-            self.task_publisher.publish(msgs)
+
     
 
     def request_barrier(self, tasks):
@@ -227,7 +224,7 @@ class Manager(Node):
         comm_edges = self.graph_manager.get_edge()
         self.get_logger().debug(f"{AnsiColor.BOLD_GREEN} Current communication edges: {comm_edges} {AnsiColor.RESET}")
 
-        tasks, possible_task_paths, decomposition_needed = self.task_manager.obtain_current_tasks(current_time, comm_edges, self.get_logger())
+        tasks, possible_task_paths, decomposition_needed = self.task_manager.get_active_tasks_and_decomposition_paths(current_time, comm_edges, self.get_logger())
 
         if not decomposition_needed:
             self.current_tasks = tasks
@@ -241,13 +238,21 @@ class Manager(Node):
                 self.get_logger().info(f"{AnsiColor.BOLD_GREEN} All tasks can be decomposed successfully!{AnsiColor.RESET}")
                 self.current_tasks = new_tasks
                 self.request_barrier(new_tasks)
-                return 
+                
+                if self.agent_state == AgentState.GATHERING :
+                    self.gather_command_pub.publish(Bool(data=False))
+                
+                return # exit loop 
                 
             else:
-                self.get_logger().info(f"{AnsiColor.BOLD_YELLOW} Decomposition attempt {jj} out of {len(possible_task_paths)} failed. Solver returned status: {cvx_status}. Trying another decomposition... {AnsiColor.RESET}")
+                self.get_logger().info(f"{AnsiColor.BOLD_YELLOW} Decomposition paths {task_paths} failed with status {cvx_status} . Trying another decomposition... {AnsiColor.RESET}")
 
         
-        self.get_logger().error("All task decomposition attempts failed. No feasible solution found for the current communication graph.")
+        self.get_logger().error("All task decomposition attempts failed.")
+        if self.agent_state != AgentState.GATHERING:
+            self.get_logger().info(f"{AnsiColor.BOLD_RED} Call gathering command since no decomposition was successful. {AnsiColor.RESET}")
+            self.gather_command_pub.publish(Bool(data=True))
+
 
     def mainloop(self):
         
@@ -265,10 +270,10 @@ class Manager(Node):
                 missing_agents =  self.graph_manager.offline_agents()
                 self.get_logger().info(f"Waiting for odom messages from agents: {missing_agents}")
 
-        elif self.manager_state == ManagerState.READY and self.agent_state == AgentState.READY:
+        elif self.manager_state == ManagerState.READY and (self.agent_state == AgentState.READY or self.agent_state == AgentState.GATHERING):
 
             
-            self.get_logger().info(f"{AnsiColor.BOLD_GREEN} MPC currently working. {AnsiColor.RESET}",throttle_duration_sec=5.0)
+            self.get_logger().info(f"{AnsiColor.BOLD_GREEN} MPC currently mode {self.agent_state.name}. {AnsiColor.RESET}",throttle_duration_sec=5.0)
       
             if self.start_time is None: # time is considered since the start of the mission
                 self.start_time = self.get_clock().now()

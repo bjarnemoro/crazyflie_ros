@@ -127,10 +127,12 @@ def solve_task_decomposition(tasks , task_paths: list[tuple[int,int]], BOX_WEIGH
             e_var         = edge_vars_pair[0]
             scale_var     = edge_vars_pair[1]
             u1,v1         = edge_vars_pair[2]
-            if (u1,v1) != (u,v):
-                e_var = -e_var
             
-            e_sum     += e_var
+            if (u1,v1) != (u,v):
+                e_sum -= e_var 
+            else:
+                e_sum     += e_var
+            
             alpha_sum += scale_var
             
             constraints += [cp.norm(e_var) <= COMM_DISTANCE]
@@ -138,19 +140,19 @@ def solve_task_decomposition(tasks , task_paths: list[tuple[int,int]], BOX_WEIGH
 
         # containment constraint
         for vertex in vertices_list:
-            vv = e_sum + alpha_sum * task.size * vertex
+            vv = e_sum + alpha_sum * vertex
             constraints.append(H @ (e_rel- vv) <= b * task.size )
 
     # find cycles TODO: implement cycle overload
     cycles = graph.find_all_cycles()
-    logger.debug(f"Found {len(cycles)} cycles in the graph")
-    for cycle in cycles:
-        logger.debug(f"Cycle: {cycle}")
+    logger.error(f"Found {len(cycles)} cycles in the graph")
+    for i, cycle in enumerate(cycles):
+        logger.error(f"Cycle {i}: {cycle}")
 
     # add constraint on the cycle
     for cycle in cycles:
-        cycle_sum = 0
-        cycle_scale_sum = 0
+        cycle_sum = 0.
+        cycle_scale_sum = 0.
         cycle_path = [cycle[i:i+2] for i in range(len(cycle)-1)]
 
         for edge in cycle_path:
@@ -161,11 +163,13 @@ def solve_task_decomposition(tasks , task_paths: list[tuple[int,int]], BOX_WEIGH
             u1,v1         = edge_vars_pair[2]
             
             if (u1,v1) != (u,v):
-                e_var = -e_var
-            cycle_sum       += e_var
-            cycle_scale_sum += scale_var
+                cycle_sum -= e_var
+            else:
+                cycle_sum += e_var
 
-        constraints += [cycle_sum == 0]
+            cycle_scale_sum += scale_var
+        
+        constraints += [-H@cycle_sum <= 2*cycle_scale_sum/np.sqrt(2) * b]
 
     # define cost
     cost = 0.
@@ -175,9 +179,6 @@ def solve_task_decomposition(tasks , task_paths: list[tuple[int,int]], BOX_WEIGH
         i,j = edge
         edge_vars_pair = graph.edges[i][j]
         e_var, scale_var,_ = edge_vars_pair
-        
-        t = cp.Variable()
-        constraints += [t >= 0]
 
         cost += -BOX_WEIGHT *scale_var 
         cost += C_norm * cp.norm(e_var)
@@ -217,7 +218,7 @@ def solve_task_decomposition(tasks , task_paths: list[tuple[int,int]], BOX_WEIGH
             new_task = Task(
                 edges        = [u,v],
                 rel_position = e_value.flatten(),
-                size         = scale_value * task.size,
+                size         = scale_value/np.sqrt(2),
                 timespan     = task.timespan,
                 period_num   = task.period_num
             )

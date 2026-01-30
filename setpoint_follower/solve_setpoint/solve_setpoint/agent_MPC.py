@@ -14,7 +14,7 @@ from std_msgs.msg import Int32, Bool
 
 from barrier_msg.msg import BMsg, BMsglist
 from solve_setpoint.bMsg import bMsg, HyperCubeHandler
-from incorporate_barrier.MPC_barrier import MPCsolver
+from incorporate_barrier.MPC_barrier import STLMPC
 from crazyflie_interfaces.srv import Takeoff
 from solve_setpoint.utils import WorkingMode, AgentState, ManagerState, AnsiColor
 
@@ -44,7 +44,7 @@ class MPC_agents(Node):
         self.landing_time = 10.0 # takes 8 seconds to land
         self.Z_SPEED      = 0.5
 
-        self.mpc_solver = MPCsolver(num_agents = self.NUM_AGENTS,
+        self.mpc_solver = STLMPC(num_agents = self.NUM_AGENTS,
                                 agents_dim = self.DIM,
                                 dt         = 0.1,
                                 horizon    = 20,
@@ -121,6 +121,7 @@ class MPC_agents(Node):
         self.land_pos  = None
         self.get_logger().info('Finish startup')
         self.stop_mpc  = False
+        self.gathering_pos = np.array([0.,0.,0.])
 
     def on_stop(self, msg):
         if msg.data == True:
@@ -128,9 +129,14 @@ class MPC_agents(Node):
                 self.get_logger().info(f'{AnsiColor.RED} Received STOP command... {AnsiColor.RESET}')
                 self.state = AgentState.STOP
                 self.timer.cancel()
+        elif msg.data == False:
+            if self.state == AgentState.STOP:
+                self.get_logger().info(f'{AnsiColor.GREEN} Resuming from STOP command... {AnsiColor.RESET}')
+                self.state = AgentState.READY
+                self.timer = self.create_timer(self.AGENT_TIMER, self.MPC_callback)
 
     def landing_command_callback(self, msg):
-        if msg.data == True:
+        if msg.data == True: 
             if self.state != AgentState.LANDING:
                 self.get_logger().info(f'{AnsiColor.BLUE} Received landing command. Switching to LANDING state... {AnsiColor.RESET}')
                 self.state = AgentState.LANDING
@@ -140,6 +146,10 @@ class MPC_agents(Node):
             if self.state != AgentState.GATHERING:
                 self.get_logger().info(f'{AnsiColor.BLUE} Received gathering command. Switching to GATHERING state... {AnsiColor.RESET}')
                 self.state = AgentState.GATHERING
+        elif msg.data == False:
+            if self.state == AgentState.GATHERING:
+                self.get_logger().info(f'{AnsiColor.BLUE} Stopping gathering. Switching to READY state... {AnsiColor.RESET}')
+                self.state = AgentState.READY
 
     def odom_callback(self, msg, idx):
         if type(msg) == Odometry:
@@ -291,6 +301,37 @@ class MPC_agents(Node):
                 pos.yaw = 0.
                 publisher.publish(pos)
 
+    def gathering(self):
+
+        if self.start_mission_time is None:
+            self.start_mission_time = self.get_clock().now()
+        self.time = self.get_clock().now() - self.start_mission_time
+        time_sec = self.time.nanoseconds / 1e9
+
+        self.get_logger().info(f"{AnsiColor.BLUE} Gathering initiated {time_sec:.2f}s {AnsiColor.RESET}",throttle_duration_sec=5.0)
+        
+        if self.SYSTEM == WorkingMode.SIM:
+            k_p = 0.5
+            for idx, publisher in enumerate(self.twist_publishers):
+                msg = Twist()
+                agent_index  = self.DIM*idx
+                msg.linear.x = (self.gathering_pos[0] - self.pos[idx,0]) * k_p
+                msg.linear.y = (self.gathering_pos[1] - self.pos[idx,1]) * k_p
+                msg.linear.z = np.clip(self.hoover_heights[idx] - self.pos[idx, 2], -self.Z_SPEED, self.Z_SPEED)
+                msg.angular.z = np.clip(0. - self.angles[idx, 2], -self.SPEED, self.SPEED)
+                publisher.publish(msg)
+        
+        if self.SYSTEM == WorkingMode.REAL:
+            
+            for idx, publisher in enumerate(self.twist_publishers):
+                
+                pos = Position()
+                agent_index  = self.DIM*idx
+                pos.x = self.gathering_pos[0]
+                pos.y = self.gathering_pos[1]
+                pos.z = self.hoover_heights[idx]
+                pos.yaw = 0.
+                publisher.publish(pos)
 
         
 
@@ -318,6 +359,9 @@ class MPC_agents(Node):
            
         elif self.state == AgentState.READY:
             self.run_mission()
+        
+        elif self.state == AgentState.GATHERING:
+            self.gathering()
             
         
     def update_full_state(self, twist, idx):

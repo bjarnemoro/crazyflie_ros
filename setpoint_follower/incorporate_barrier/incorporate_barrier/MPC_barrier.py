@@ -8,7 +8,7 @@ from barrier_msg.msg import Config
 from incorporate_barrier.bMsg import bMsg, HyperCubeHandler
 
 
-class MPCsolver:
+class STLMPC:
     def __init__(
         self,
         num_agents: int,

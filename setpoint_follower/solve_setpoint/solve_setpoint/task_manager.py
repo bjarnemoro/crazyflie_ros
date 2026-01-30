@@ -55,9 +55,49 @@ class TaskManager():
         timespans = list(set(timespans))                              # remove duplicates and retrun ordered list
         timespans.sort()
         return timespans
+
     
-    def obtain_current_tasks(self, current_time, comm_edges, log):
+    def get_active_tasks(self, current_time):
+        """
+        Takes current time as input.
+
+        The funciton computes the currently active tasks (i.e. not yet concluded).
+
+        The returned values are:
+
+        - active_tasks: list of active tasks
+        """
         
+        active_tasks = []
+        # find corrent period
+        active_period_num = None
+        for j,period in enumerate(self.periods):
+            if current_time < period[1] :
+                active_period_num = j
+                break
+        active_tasks = self.task_per_period[active_period_num]
+        return active_tasks
+
+    def get_active_agents(self, current_time):
+        """
+        Takes current time as input.
+
+        The funciton computes the currently active agents (i.e. agents involved in not yet concluded tasks).
+
+        The returned values are:
+
+        - active_agents: list of active agents
+        """
+        
+        active_tasks = self.get_active_tasks(current_time)
+        active_agents = set()
+        for task in active_tasks:
+            active_agents.add(task.edges[0])
+            active_agents.add(task.edges[1])
+        return list(active_agents)
+    
+    def get_active_tasks_and_decomposition_paths(self, current_time, comm_edges, log):
+
         """
         Takes current time, communication edges as input.
 
@@ -71,17 +111,8 @@ class TaskManager():
         - task_box_size: list of box sizes for each active task e.g [1.,1.] to indicate the relative tolerance is 1 by 1 meters
 
         """
-        
-        active_tasks = []
-        # find corrent period
-        active_period_num = None
-        for j,period in enumerate(self.periods):
-            if current_time < period[1] :
-                active_period_num = j
-                break # only one period is active at a time
 
-        active_tasks = self.task_per_period[active_period_num]
-        active_tasks
+        active_tasks = self.get_active_tasks(current_time)
 
         # TODO: (Add this outside this function) check that there is only one task per edge
         for i, taski in enumerate(active_tasks):

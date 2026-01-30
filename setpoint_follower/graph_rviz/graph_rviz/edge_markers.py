@@ -40,7 +40,7 @@ def sphere(time, marker_id, pos, color):
     marker.header.frame_id = "world"
     marker.header.stamp = time
     marker.type = Marker.SPHERE
-    marker.ns = "edges"
+    marker.ns = "agents"
     marker.id = marker_id
 
     marker.action = Marker.ADD
@@ -53,14 +53,25 @@ def sphere(time, marker_id, pos, color):
     marker.pose.orientation.z = 0.0
     marker.pose.orientation.w = 1.0
 
-    marker.scale.x = 0.15
-    marker.scale.y = 0.15
-    marker.scale.z = 0.15
+    marker.scale.x = 1.0
+    marker.scale.y = 1.0
+    marker.scale.z = 1.0
 
     marker.color.r = color[0]
     marker.color.g = color[1]
     marker.color.b = color[2]
-    marker.color.a = 1.0
+    marker.color.a = 0.2
+
+
+    return marker
+
+def delete_sphere(time, marker_id):
+    marker = Marker()
+    marker.header.frame_id = "world"
+    marker.header.stamp = time
+    marker.ns = "agents"
+    marker.id = marker_id
+    marker.action = Marker.DELETE
 
     return marker
 
@@ -124,9 +135,9 @@ class GraphMarkerPublisher(Node):
         self.HOOVERING_HEIGHT = self.get_parameter("HOOVERING_HEIGHT").value
         self.COMM_DISTANCE = self.get_parameter("COMM_DISTANCE").value
 
-        self.publisher = self.create_publisher(MarkerArray, 'visualization_marker', 10)
+        self.publisher      = self.create_publisher(MarkerArray, 'visualization_marker', 10)
         self.task_publisher = self.create_publisher(MarkerArray, 'task_visualization_marker', 10)
-        self.timer = self.create_timer(0.1, self.timer_callback)
+        self.timer          = self.create_timer(0.1, self.timer_callback)
 
         
 
@@ -139,6 +150,7 @@ class GraphMarkerPublisher(Node):
 
         self.drone_pos = np.zeros((self.NUM_AGENTS, 3))
         self.edges = []
+        self.main_agents = []
         self.task_msgs = []
         self.prev_marker_count = 0
         self.prev_edge_count = 0
@@ -146,39 +158,47 @@ class GraphMarkerPublisher(Node):
 
         self.create_subscription(Int32MultiArray, "/graph_edges", self.set_edges, 10)
         self.create_subscription(TMsglist, "/task_edges", self.set_task, 10)
-        self.markers_id_dict = {}
-        self.marker_id = 0
+        self.create_subscription(Int32MultiArray, "/active_agents",self.set_main_agents, 10)
+        
+        self.edges_set  = set()
+        self.agents_set = set()
+
+
 
     def timer_callback(self):
+
+        ################################################
+        # Draw communicaiton graph
+        ###############################################
+        
         marker_array = MarkerArray()
-        #add lines where needed
         for edge in self.edges:
             
-            marker_id_edge = self.markers_id_dict.get(edge, None)
-            if marker_id_edge is None:
-                marker_id_edge = self.marker_id
-                self.markers_id_dict[edge] = marker_id_edge
-                self.marker_id += 1
-            
+            marker_id_edge = int(str(edge[0]) + str(edge[1])) 
             time   = self.get_clock().now().to_msg()
             pos1   = self.drone_pos[edge[0]-1] # -1 for 0-based indexing
             pos2   = self.drone_pos[edge[1]-1] # -1 for 0-based indexing
             color  = [1.0, 0.0, 0.0]
             marker = line_strip(time, marker_id_edge, pos1, pos2, color)
             marker_array.markers.append(marker)
+            self.edges_set.add(edge)
 
-        for edge in self.markers_id_dict:
+        for edge in self.edges_set:
             if edge not in self.edges:
-                marker_id_edge = self.markers_id_dict[edge]
+                marker_id_edge = int(str(edge[0]) + str(edge[1])) 
                 time = self.get_clock().now().to_msg()
                 marker = delete_strip(time, marker_id_edge)
                 marker_array.markers.append(marker)
   
         self.publisher.publish(marker_array)
 
-        # TODO: add the task marker logic
-
-        ## add marker for each agent 
+        # # TODO: add the task marker logic
+        
+        ################################################
+        # Draw sphere around active agents and add agents numbers
+        ###############################################
+        ## add marker TEXT for each agent 
+        marker_array = MarkerArray()
         for i in range(self.NUM_AGENTS):
             time = self.get_clock().now().to_msg()
             pos = self.drone_pos[i] + np.array([0.0, 0.0, 0.2])
@@ -186,8 +206,27 @@ class GraphMarkerPublisher(Node):
             marker = text_marker(time, i, pos, i+1, color)
             marker_array.markers.append(marker)
 
+
+        for agent in self.main_agents:
+            
+            marker_id_agent = agent
+            
+            time   = self.get_clock().now().to_msg()
+            pos    = self.drone_pos[agent-1] # -1 for 0-based indexing
+            color  = [0.0, 1.0, 0.0]
+            marker = sphere(time, marker_id_agent, pos, color)
+            marker_array.markers.append(marker)
+            self.agents_set.add(agent)
+
+        for agent in self.agents_set:
+            if agent not in self.main_agents:
+                marker_id_agent = agent
+                time = self.get_clock().now().to_msg()
+                marker = delete_sphere(time, marker_id_agent)
+                marker_array.markers.append(marker)
+  
         self.task_publisher.publish(marker_array)
-        self.prev_marker_count = len(self.task_msgs)
+
 
     def pos_callback(self, msg, idx):
         self.drone_pos[idx][0] = msg.pose.pose.position.x
@@ -196,13 +235,13 @@ class GraphMarkerPublisher(Node):
 
     def set_edges(self, msg):
         data = msg.data
-        self.edges = [tuple(sorted((data[i], data[i+1]))) for i in range(0, len(data), 2)]
+        self.edges = {tuple(sorted((data[i], data[i+1]))) for i in range(0, len(data), 2)}
 
     def set_task(self, msg):
         self.task_msgs = msg.messages
 
     def set_main_agents(self, msg):
-        self.main_agents = msg
+        self.main_agents = {i for i in msg.data}
 
 def signal_handler(sig, frame):
     print("Shutdown signal received, cleaning up...")
