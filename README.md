@@ -40,7 +40,6 @@ mkdir -p ros_ws/src
 Install this repository and the crazyswarm2 library:
 
 ```bash
-Copy code
 cd ros_ws/src
 git clone --recursive https://github.com/bjarnemoro/crazyflie_ros.git
 git clone --recursive https://github.com/IMRCLab/crazyswarm2.git
@@ -49,21 +48,18 @@ git clone --recursive https://github.com/IMRCLab/crazyswarm2.git
 Install the motion capture tracking dependencies:
 
 ```bash
-Copy code
 sudo apt-get install ros-${ROS_DISTRO}-motion-capture-tracking
 sudo apt-get install ros-${ROS_DISTRO}-tf-transformations
 ```
 Install the cflib Python dependencies:
 
 ```bash
-Copy code
 pip3 install cflib transforms3d
 ```
 
 If you encounter errors related to the crazyswarm2 library, please refer to the crazyswarm2 [installation guide](https://imrclab.github.io/crazyswarm2/installation.html). If everything looks good, build the workspace:
 
 ```bash
-Copy code
 cd ..
 colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 ```
