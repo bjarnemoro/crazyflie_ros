@@ -145,9 +145,9 @@ def solve_task_decomposition(tasks , task_paths: list[tuple[int,int]], BOX_WEIGH
 
     # find cycles TODO: implement cycle overload
     cycles = graph.find_all_cycles()
-    logger.error(f"Found {len(cycles)} cycles in the graph")
+    logger.debug(f"Found {len(cycles)} cycles in the graph")
     for i, cycle in enumerate(cycles):
-        logger.error(f"Cycle {i}: {cycle}")
+        logger.debug(f"Cycle {i}: {cycle}")
 
     # add constraint on the cycle
     for cycle in cycles:

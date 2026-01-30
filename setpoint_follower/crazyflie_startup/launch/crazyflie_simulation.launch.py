@@ -29,8 +29,8 @@ from launch_ros.actions import Node
  
 
 def create_new_sdf(name):
-    pkg_10_world = get_package_share_directory('crazyflie_ros2_setpoint_follower')
-    SDF_PATH = os.path.join(pkg_10_world, 'models/crazyflie/model.sdf')
+    pkg_world = get_package_share_directory('crazyflie_ros2_setpoint_follower')
+    SDF_PATH = os.path.join(pkg_world, 'models/crazyflie/model.sdf')
 
     with open(SDF_PATH) as f:
         sdf = f.read()
@@ -39,7 +39,7 @@ def create_new_sdf(name):
 
     sdf = sdf.replace("<robotNamespace>crazyflie</robotNamespace>", "<robotNamespace>{}</robotNamespace>".format(name))
 
-    filepath = os.path.join(pkg_10_world, "models/crazyflie/{}.sdf".format(name))
+    filepath = os.path.join(pkg_world, "models/crazyflie/{}.sdf".format(name))
     file = open(filepath, "w")
     file.write(sdf)
     
@@ -143,7 +143,7 @@ def generate_launch_description():
     # Setup project paths
     pkg_project_bringup = get_package_share_directory('ros_gz_crazyflie_bringup')
     pkg_project_gazebo = get_package_share_directory('ros_gz_crazyflie_gazebo')
-    pkg_10_world = get_package_share_directory('crazyflie_ros2_setpoint_follower')
+    pkg_world = get_package_share_directory('crazyflie_ros2_setpoint_follower')
     pkg_ros_gz_sim = get_package_share_directory('ros_gz_sim')
 
     # Setup to launch the simulator and Gazebo world
@@ -151,13 +151,13 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(pkg_ros_gz_sim, 'launch', 'gz_sim.launch.py')),
             condition=IfCondition(LaunchConfiguration('gazebo_launch')),
-        launch_arguments={'gz_args': os.path.join(pkg_10_world, 'config', 
-        'crazyflie_world_10.sdf') + ' -r'}.items(),
+        launch_arguments={'gz_args': os.path.join(pkg_world, 'config', 
+        'crazyflie_world.sdf') + ' -r'}.items(),
     )
 
     #bridge_nodes = generate_bridge_nodes(drones)
     config_path = os.path.join(
-        pkg_10_world,
+        pkg_world,
         'config',
         'config.yaml'
     )

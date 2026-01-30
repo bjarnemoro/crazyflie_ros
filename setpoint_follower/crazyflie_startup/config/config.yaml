@@ -7,8 +7,7 @@
     DIM: 2
     NUM_AGENTS: 10
 
-    MAIN_TIMER: 0.1
-    SETPOINT_TIMER: 0.1
+    MANAGER_TIMER: 0.8
     AGENT_TIMER: 0.05  # frequency of the MPC 
     SPEED: 0.4
     BOX_WEIGHT: 10

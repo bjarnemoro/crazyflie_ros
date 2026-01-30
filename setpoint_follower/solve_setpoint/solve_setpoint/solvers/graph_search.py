@@ -169,7 +169,7 @@ def decomposition_path_guesses(inconsistent_tasks : list[Task], graph : dict[dic
         valid_paths_costs = [ (p,c) for p, c, l in zip(paths, costs, lengths) if l >= min_length]
         
         if not len(valid_paths_costs):
-            logger.error(f"No valid path found for task {task.edges} with min length {min_length}. Marking decomposition as infeasible.")
+            logger.debug(f"No valid path found for task {task.edges} with min length {min_length}. Marking decomposition as infeasible.")
             paths_dict[task.ID] = paths
 
         # sort by cost

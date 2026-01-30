@@ -42,7 +42,7 @@ def generate_launch_description():
     # Setup to launch a crazyflie gazebo simulation from the ros_gz_crazyflie project
     crazyflie_simulation = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(pkg_project_crazyflie_setpoint, 'launch', 'crazyflie_simulation_10.launch.py'))
+            os.path.join(pkg_project_crazyflie_setpoint, 'launch', 'crazyflie_simulation.launch.py'))
     )
 
     # Define the manager node

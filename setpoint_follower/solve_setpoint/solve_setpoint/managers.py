@@ -37,19 +37,18 @@ class Manager(Node):
         # self.declare_parameter("SYSTEM", 2)
         # self.declare_parameter("DIM", 2)
         # self.declare_parameter("NUM_AGENTS", 10)
-        # self.declare_parameter("MAIN_TIMER", 0.1)
+        # self.declare_parameter("MANAGER_TIMER", 0.1)
         # self.declare_parameter("SETPOINT_TIMER", 0.1)
         # self.declare_parameter("COMM_DISTANCE", 1.1)
         # self.declare_parameter("BOX_WEIGHT", 10)
         
-        self.robot_prefix = self.get_parameter('robot_prefix').value
-        self.SYSTEM = self.get_parameter("SYSTEM").value
-        self.DIM = self.get_parameter("DIM").value
-        self.NUM_AGENTS = self.get_parameter("NUM_AGENTS").value
-        self.MAIN_TIMER = self.get_parameter("MAIN_TIMER").value
-        self.SETPOINT_TIMER = self.get_parameter("SETPOINT_TIMER").value
+        self.robot_prefix  = self.get_parameter('robot_prefix').value
+        self.SYSTEM        = self.get_parameter("SYSTEM").value
+        self.DIM           = self.get_parameter("DIM").value
+        self.NUM_AGENTS    = self.get_parameter("NUM_AGENTS").value
+        self.MANAGER_TIMER = self.get_parameter("MANAGER_TIMER").value
         self.COMM_DISTANCE = self.get_parameter("COMM_DISTANCE").value
-        self.BOX_WEIGHT = self.get_parameter("BOX_WEIGHT").value
+        self.BOX_WEIGHT    = self.get_parameter("BOX_WEIGHT").value
 
 
         ##
@@ -111,7 +110,7 @@ class Manager(Node):
                 odom_type[self.SYSTEM], drone + odom_name[self.SYSTEM], callback, 10))
 
         #start the main loops of the system with a timer method
-        self.timer = self.create_timer(self.MAIN_TIMER, self.mainloop)
+        self.timer = self.create_timer(self.MANAGER_TIMER, self.mainloop)
             
         #set the starting state
         self.manager_state = ManagerState.WAITING_FOR_ODOMETRY
@@ -183,6 +182,10 @@ class Manager(Node):
                 self.get_logger().info(f"{AnsiColor.BOLD_GREEN} Recaculating task at recalculation time : {current_time}" \
                                     f".Remaining recalculation times: {self.recalc_times} {AnsiColor.RESET}")
         
+        if self.agent_state == AgentState.GATHERING:
+            self.get_logger().info(f"{AnsiColor.BOLD_GREEN} Attempting to re-calculate tasks while gathering {AnsiColor.RESET}")
+            self.recalculate_tasks(current_time)
+
         if communication_graph_changed:
             is_critical = False
             for task in self.current_tasks:
@@ -229,7 +232,8 @@ class Manager(Node):
         if not decomposition_needed:
             self.current_tasks = tasks
             self.request_barrier(tasks)
-
+        
+        num_attempts = len(possible_task_paths)
         for jj,task_paths in enumerate(possible_task_paths,start=1) :
 
             cvx_status, new_tasks = solve_task_decomposition(tasks, task_paths,self.BOX_WEIGHT, self.COMM_DISTANCE, self.get_logger())
@@ -245,9 +249,8 @@ class Manager(Node):
                 return # exit loop 
                 
             else:
-                self.get_logger().info(f"{AnsiColor.BOLD_YELLOW} Decomposition paths {task_paths} failed with status {cvx_status} . Trying another decomposition... {AnsiColor.RESET}")
+                self.get_logger().info(f"{AnsiColor.BOLD_YELLOW} Decomposition attempt {jj}/{num_attempts}: paths {task_paths} failed with status {cvx_status} . Trying another decomposition... {AnsiColor.RESET}")
 
-        
         self.get_logger().error("All task decomposition attempts failed.")
         if self.agent_state != AgentState.GATHERING:
             self.get_logger().info(f"{AnsiColor.BOLD_RED} Call gathering command since no decomposition was successful. {AnsiColor.RESET}")

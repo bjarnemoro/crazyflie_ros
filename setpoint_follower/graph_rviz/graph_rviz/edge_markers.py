@@ -8,7 +8,6 @@ from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
 
 from std_msgs.msg import Int32MultiArray
-from msg_interface.msg import TaskEdge, TaskEdgeList
 from barrier_msg.msg import TMsglist
 
 def line_strip(time, marker_id, pos1, pos2, color):
