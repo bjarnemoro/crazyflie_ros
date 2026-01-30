@@ -60,9 +60,7 @@ Copy code
 pip3 install cflib transforms3d
 ```
 
-If you encounter errors related to the crazyswarm2 library, please refer to the crazyswarm2 [installation guide](https://imrclab.github.io/crazyswarm2/installation.html).
-
-If everything looks good, build the workspace:
+If you encounter errors related to the crazyswarm2 library, please refer to the crazyswarm2 [installation guide](https://imrclab.github.io/crazyswarm2/installation.html). If everything looks good, build the workspace:
 
 ```bash
 Copy code
