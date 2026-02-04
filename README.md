@@ -66,19 +66,57 @@ colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 
 ### Running Simulation
 you can run the main simulation in gazebo with rviz
+
+1. Without Human in the loop (tasks are read from the configuration file inside `config/mission/simple.yaml`)
 ```
-ros2 launch crazyflie_ros2_setpoint_follower solver.launch.py  rviz:=true
+ros2 launch crazyflie_ros2_setpoint_follower solver.launch.py mission_yaml:=simple.yaml backend:=hardware hil:=false
+
 ```
 
-you can store you mission in a config file like the ones stored in ´setpoint_follower/crazyflie_startup/config´ folder. Then you can start your personalized mission as 
+2. with human in the loop
 
 ```
-ros2 launch crazyflie_ros2_setpoint_follower solver.launch.py  rviz:=true mission_yaml:=ABC.yaml
+ros2 launch crazyflie_ros2_setpoint_follower solver.launch.py mission_yaml:=simple.yaml backend:=hardware hil:=true
+
 ```
+
+you can store you mission in a config file like the ones stored in ´setpoint_follower/crazyflie_startup/config/missions´ folder. Then you can start your personalized mission as 
+
 
 ### Running Hardware Experiment
 
-The real world file is currently missing however in order to run that you connect to the crazyflie using the crazyswarm library
+To run the real experiments you need to set up a few things 
+
+1. Pull a number of n of crazyflies. These are numbered and their address is the hexadeciaml version of their number. The address of each drone will be defined by this funciton 
+
+```
+f"radio://{radio}/{channel}/2M/E7E7E7E7{agent_id:02X}"
+```
+
+**radio**: defines which radio to use if you use multiple. The number starts from 0 if you have one radio.
+
+
+**channel**:defined which channel the crazyflie is currently on. This should be setup by the `cfclient` connecting the drone to your computer via usb cable
+
+**address**. The address of the crazyflie should also be set form the `cfclient`. It is typical to use the convension of hexadeciaml number. So crazyflie 1 will have the address E7E7E7E701, while crazyflie 10 will have the address E7E7E7E70A and so on. If you are unsure you can use this [tool](https://www.binaryhexconverter.com/decimal-to-hex-converter) to help you, but you will not have to do this conversion yourself as it is done already inside the package.
+
+
+2. Once your crazyflies are ready you should **first** run the launch file for your mission
+
+```
+ros2 launch crazyflie_ros2_setpoint_follower solver.launch.py mission_yaml:=simple.yaml backend:=hardware hil:=true
+
+```
+
+
+
+
+
+
+
+
+
+
 ```
 ros2 launch crazyflie launch.py backend:=cflib topics.poses.qos.mode:=sensor
 ros2 launch crazyflie_ros2_setpoint_follower solver_real.launch.py
