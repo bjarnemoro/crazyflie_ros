@@ -101,6 +101,48 @@ f"radio://{radio}/{channel}/2M/E7E7E7E7{agent_id:02X}"
 **address**. The address of the crazyflie should also be set form the `cfclient`. It is typical to use the convension of hexadeciaml number. So crazyflie 1 will have the address E7E7E7E701, while crazyflie 10 will have the address E7E7E7E70A and so on. If you are unsure you can use this [tool](https://www.binaryhexconverter.com/decimal-to-hex-converter) to help you, but you will not have to do this conversion yourself as it is done already inside the package.
 
 
+2. Make sure that the mocap system is active and is delivering the point cloud of the markers.
+
+3. Create a configuation file inside `config/missions/` in which you set up the required agents and you define the initial position of the agents as
+
+```
+/**: 
+  ros__parameters:
+    
+    ###########################################
+    # General node parameters 
+    ###########################################
+    DIM: 2               # Dimension of the space
+    MANAGER_TIMER: 0.8   # Time at which the manager updates (seconds)
+    AGENT_TIMER: 0.1     # frequency of the MPC (seconds)
+    SPEED: 0.4           # Nominal speed of the agents
+    BOX_WEIGHT: 10       # Weight of the boxes in the cost function
+    COMM_DISTANCE: 2.    # Communication distance between agents
+    HOOVERING_HEIGHT: 1. # Alitude at which the drones move nominally
+
+    ###########################################################################################################
+    # Specific of each agent. The agent number corresponds to the crazyflie number (check the tag on the drone).
+    # N.B. Make sure that a drone with such number exists in the real fleet or in the simulation.
+    ###########################################################################################################
+
+    agent_1:
+      pos:  [ -1.08,   -0.99,  0.3 ]
+      radio: 0
+      channel: 40
+
+    agent_4:
+      pos:  [ -1.1,  0.68,  0.3 ]
+      radio: 0
+      channel: 40
+
+    agent_5:
+      pos:  [ -0.52,  -0.18,  0.3 ]
+      radio: 0
+      channel: 40
+```
+
+make sure that the initial position is roughly accurate.
+
 2. Once your crazyflies are ready you should **first** run the launch file for your mission
 
 ```
@@ -108,41 +150,104 @@ ros2 launch crazyflie_ros2_setpoint_follower solver.launch.py mission_yaml:=simp
 
 ```
 
+it is important that launch this first as it will automatically generate a custom `crazyflie.yalm` which can be used by the crazyswamr library to connect to each crazyflie
+
+3. After you have launch your mission you can launch your drones using crazyswamr via the custom launch file 
+
+```
+ros2 launch crazyflie_ros2_setpoint_follower launch_cf_hardware.launch.py 
+
+```
+
+this is just an helper node that launches crazyswarm with some specific parameters that will be useful for this simulation. 
 
 
+## Undesratnding the misison file
 
-
-
-
-
+The whole mission is defined by the mission file that you have created in your `missions/` folder. A simple example could be given by this file 
 
 
 ```
-ros2 launch crazyflie launch.py backend:=cflib topics.poses.qos.mode:=sensor
-ros2 launch crazyflie_ros2_setpoint_follower solver_real.launch.py
+
+/**: 
+  ros__parameters:
+    
+    ###########################################
+    # General node parameters 
+    ###########################################
+    DIM: 2               # Dimension of the space
+    MANAGER_TIMER: 0.8   # Time at which the manager updates (seconds)
+    AGENT_TIMER: 0.1     # frequency of the MPC (seconds)
+    SPEED: 0.4           # Nominal speed of the agents
+    BOX_WEIGHT: 10       # Weight of the boxes in the cost function
+    COMM_DISTANCE: 2.    # Communication distance between agents
+    HOOVERING_HEIGHT: 1. # Alitude at which the drones move nominally
+
+    ###########################################################################################################
+    # Specific of each agent. The agent number corresponds to the crazyflie number (check the tag on the drone).
+    # N.B. Make sure that a drone with such number exists in the real fleet or in the simulation.
+    ###########################################################################################################
+
+    agent_1:
+      pos:  [ -1.08,   -0.99,  0.3 ]
+      radio: 0
+      channel: 40
+
+    agent_4:
+      pos:  [ -1.1,  0.68,  0.3 ]
+      radio: 0
+      channel: 40
+
+    agent_5:
+      pos:  [ -0.52,  -0.18,  0.3 ]
+      radio: 0
+      channel: 40
+
+
+    ###########################################################################################################
+    # Tasks specifications
+    ###########################################################################################################
+
+    # Tasks grouping by period
+    PERIODS:
+      period_0: [20.0, 25.0]
+      period_1: [50.0, 65.0]
+      period_2: [85.0, 90.0]
+
+    TASKS:
+      # PERIOD 0 — LETTER K
+      # =======================
+      # Origin (0,0) is the center of the K.
+      task_1: 
+        period_num: 0             # period at which the task is accomplished 
+        edges: [1, 1]             # edge that defines the relative position (nb: make sure that an agent with the given number exists)
+        rel_position: [0., 0.0]   # relative position with respect to the edge defined by the two agents
+        size: 0.2                 # size of the task (radius of the area to be covered)
+        type: "always"
+      task_2: # Vertical Bottom
+        period_num: 0
+        edges: [1, 4]
+        rel_position: [0., -.9]
+        size: 0.2
+        type: "always"
+      task_3: # Midpoint/Joint
+        period_num: 0
+        edges: [1, 5]
+        rel_position: [0., .9]
+        size: 0.2
+        type: "always"
+
 ```
 
-### changing tasks
-the tasks are loaded in the setpoint_follower/solve_setpoint/solve_setpoint/managers.py
-where the TaskManager is initialized via
-```
-self.task_manager = TaskManager(self.DIM, self.tasks)
-```
-the task manager allows for loading via a list of tasks or a json file
-```
-class TaskManager():
-    def __init__(self, dim, tasks=None, task_path=None):
-        """load the the tasks either via a json file or an array of tasks with the following structure:
-        [([],[],[]), ..., ([],[],[])] with each tuple having time period, agent idx, relative pos
-        i.e [0,3], [0, 4], [10, 20] so from time 0 to 3 sec agent 0 has a postion of [10, 20] compared to agent 4"""
-```
-when loading via the list of tasks simply append them like this when initialzing the manager, with the first list time period, second the index of the agents, and the last the relative position between them.
+when launching the mission without human in the loop, the tasks will be taken from this file and given to your manager node.
+When instead the mission is launched with human in the loop, then the tasks are given directly via text as high level commands from a human operator. In this case an LLM will parse the input for you and derive the required tasks online.
+
+The commands to the llm are given simply by publishing a sting command as follows 
+
 
 ```
-self.tasks = [
-    Task([4,9], [0,9], [-2,-1]),
-    Task([4,9], [4, 5], [0, 1.6]),
-    Task([10,13], [1,8], [-2, 1]),
-    Task([10,13], [7,2], [0.2, 1.6])]
-
+ros2 topic pub --once /operator_command std_msgs/String "{data: \"Agents 5,4 and 1 should form a triangle formation between 30 and 40. Then agents 5,4 and 1 should form a straigh line and Agent 1 is at position [0,0]\"}"
 ```
+
+
+
