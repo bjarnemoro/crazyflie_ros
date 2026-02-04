@@ -10,10 +10,12 @@ from geometry_msgs.msg import PoseStamped
 from geometry_msgs.msg import Twist
 from crazyflie_interfaces.msg import Position, FullState
 from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
+
 from std_msgs.msg import Int32, Bool
 
+from incorporate_barrier.bMsg import bMsg, HyperCubeHandler
 from barrier_msg.msg import BMsg, BMsglist
-from solve_setpoint.bMsg import bMsg, HyperCubeHandler
 from incorporate_barrier.MPC_barrier import STLMPC
 from crazyflie_interfaces.srv import Takeoff
 from solve_setpoint.utils import WorkingMode, AgentState, ManagerState, AnsiColor
@@ -22,8 +24,8 @@ class MPC_agents(Node):
     def __init__(self):
         super().__init__("drones")
 
-        self.declare_parameter('robot_prefix', '/crazyflie')
-        self.declare_parameter("SYSTEM", 2)
+        self.declare_parameter("backend", "")
+        self.declare_parameter("AGENTS_INDICES",[1])
         self.declare_parameter("DIM", 10)
         self.declare_parameter("NUM_AGENTS", 10)
         self.declare_parameter("SPEED", 0.4)
@@ -32,14 +34,20 @@ class MPC_agents(Node):
         self.declare_parameter("COMM_DISTANCE", 1.0)
 
 
-        self.robot_prefix     = self.get_parameter('robot_prefix').value
-        self.SYSTEM           = self.get_parameter("SYSTEM").value
+        backend  = self.get_parameter("backend").value
+        if backend == "sim":
+            self.SYSTEM = WorkingMode.SIM
+        elif backend == "hardware":
+            self.SYSTEM = WorkingMode.REAL
+
         self.DIM              = self.get_parameter("DIM").value
         self.SPEED            = self.get_parameter("SPEED").value
         self.NUM_AGENTS       = self.get_parameter("NUM_AGENTS").value
         self.AGENT_TIMER      = self.get_parameter("AGENT_TIMER").value
         self.HOOVERING_HEIGHT = self.get_parameter("HOOVERING_HEIGHT").value
         self.COMM_DISTANCE    = self.get_parameter("COMM_DISTANCE").value
+        self.AGENTS_INDICES   = self.get_parameter("AGENTS_INDICES").value
+        self.NUM_AGENTS       = len(self.AGENTS_INDICES)
 
         self.landing_time = 10.0 # takes 8 seconds to land
         self.Z_SPEED      = 0.5
@@ -47,27 +55,21 @@ class MPC_agents(Node):
         self.mpc_solver = STLMPC(num_agents = self.NUM_AGENTS,
                                 agents_dim = self.DIM,
                                 dt         = 0.1,
-                                horizon    = 20,
+                                horizon    = 10,
                                 max_input  = self.SPEED,
                                 communication_distance = self.COMM_DISTANCE)
 
-        self.barrier_callback     = self.create_subscription(BMsglist, "/barriers", self.on_barrier_message, 10)
-        self.state_publisher      = self.create_publisher(Int32, "/agent_state", 10)
-        self.landing_command_sub  = self.create_subscription(Bool, "/landing_command", self.landing_command_callback, 10)
-        self.gather_command_sub   = self.create_subscription(Bool, "/gather_command", self.on_gather_callback, 10)
-        self.stop_command_sub     = self.create_subscription(Bool, "/stop_mpc", self.on_stop, 10)
+        self.fast_cb_group = ReentrantCallbackGroup()
+        self.mpc_cb_group = MutuallyExclusiveCallbackGroup()
 
-        if self.SYSTEM == WorkingMode.SIM:
-            self.drones = ['{}{}'.format(self.robot_prefix, i) for i in range(1,self.NUM_AGENTS+1)]
-        elif self.SYSTEM == WorkingMode.REAL:
-            self.drones = []
+        self.barrier_callback     = self.create_subscription(BMsglist, "/barriers", self.on_barrier_message, 10,  callback_group=self.mpc_cb_group)
+        self.state_publisher      = self.create_publisher(Int32, "/agent_state", 10, callback_group=self.fast_cb_group)
+        self.landing_command_sub  = self.create_subscription(Bool, "/landing_command", self.landing_command_callback, 10, callback_group=self.fast_cb_group)
+        self.gather_command_sub   = self.create_subscription(Bool, "/gather_command", self.on_gather_callback, 10, callback_group=self.fast_cb_group)
+        self.stop_command_sub     = self.create_subscription(Bool, "/stop_mpc", self.on_stop, 10, callback_group=self.fast_cb_group)
 
-            for srv_name, srv_types in self.get_service_names_and_types():
-                if 'crazyflie_interfaces/srv/StartTrajectory' in srv_types:
-                    # remove '/' and '/start_trajectory'
-                    cfname = srv_name[1:-17]
-                    if cfname != 'all':
-                        self.drones.append(cfname)
+
+        self.drones_names = ['{}{}'.format("/crazyflie", i) for i in  self.AGENTS_INDICES]
 
         odom_name = {WorkingMode.SIM: "/odom" , WorkingMode.REAL: "/pose"}
         odom_type = {WorkingMode.SIM: Odometry, WorkingMode.REAL: PoseStamped}
@@ -78,9 +80,12 @@ class MPC_agents(Node):
         self.odom_subscribers = []
         self.twist_publishers = []
         self.takeoff_services = []
-        self.hoover_heights   = [self.HOOVERING_HEIGHT + 0.1*idx for idx in range(self.NUM_AGENTS)]
+        if self.SYSTEM == WorkingMode.REAL:
+            self.hoover_heights   = [self.HOOVERING_HEIGHT  for idx in range(self.NUM_AGENTS)]
+        else:
+            self.hoover_heights   = [self.HOOVERING_HEIGHT + 0.1*idx for idx in range(self.NUM_AGENTS)]
         
-        for i, drone in enumerate(self.drones):
+        for i, drone in enumerate(self.drones_names):
             callback = lambda msg, idx=i: self.odom_callback(msg, idx)
             self.odom_subscribers.append(self.create_subscription(
                 odom_type[self.SYSTEM], drone + odom_name[self.SYSTEM], callback, 10))
@@ -97,7 +102,7 @@ class MPC_agents(Node):
         self.angles = np.zeros((self.NUM_AGENTS, 3))
 
         self.set_recv = False
-        self.timer = self.create_timer(self.AGENT_TIMER, self.MPC_callback)
+        self.timer = self.create_timer(self.AGENT_TIMER, self.MPC_callback,callback_group=self.mpc_cb_group)
 
         self.state = AgentState.TAKEOFF
         self.get_logger().info(f'Agent state : {self.state.name}')
@@ -115,7 +120,7 @@ class MPC_agents(Node):
         self.k = 2
         self.active = False
         self.called_takeoff = False
-        self.time_to_take_off = 5
+        self.time_to_take_off = 3.
 
         self.start_set = False
         self.land_pos  = None
@@ -194,6 +199,9 @@ class MPC_agents(Node):
             self.barriers.append(my_msg)
         
         self.mpc_solver.initialize_problem(self.barriers,self.get_logger())
+        
+        if self.start_mission_time is None: # at the first barrier message start the time
+            self.start_mission_time = self.get_clock().now()
 
     
     def initiate_takeoff(self):
@@ -210,14 +218,13 @@ class MPC_agents(Node):
                 publisher.publish(msg)
         if self.SYSTEM == WorkingMode.REAL:
             if not self.called_takeoff:
+                self.called_takeoff = True
                 for idx, publisher in enumerate(self.twist_publishers):
                     self.takeoff(self.hoover_heights[idx], self.time_to_take_off, idx) # TODO: have a closer look at the height (ensure collsion avoidance)
 
-            self.called_takeoff = True
-        
-        self.get_logger().info(f'{AnsiColor.BLUE} Taking off... Time elapsed: {self.time.nanoseconds / 1e9:.2f}s. Will finish at {1.2*self.time_to_take_off}s {AnsiColor.RESET}',throttle_duration_sec=2.0)
+        self.get_logger().info(f'{AnsiColor.BLUE} Taking off... Time elapsed: {self.time.nanoseconds / 1e9:.2f}s. Will finish at {self.time_to_take_off*2.0}s {AnsiColor.RESET}',throttle_duration_sec=2.0)
 
-        if self.time.nanoseconds / 1e9 > self.time_to_take_off*1.2:
+        if self.time.nanoseconds / 1e9 > self.time_to_take_off*2.0:
             self.get_logger().info(f' {AnsiColor.BLUE} Take off finished... {AnsiColor.RESET}')
             take_off_finished = True
         
@@ -243,7 +250,7 @@ class MPC_agents(Node):
                 pos   = Position()
                 pos.x = self.pos[idx, 0]
                 pos.y = self.pos[idx, 1]
-                pos.z = min(self.hoover_heights[idx]-self.hoover_heights[idx]/self.landing_time *(time_sec), 1.)
+                pos.z = self.hoover_heights[idx]-self.hoover_heights[idx]/self.landing_time *(time_sec)
                 pos.yaw = 0.
                 publisher.publish(pos)
         
@@ -255,13 +262,9 @@ class MPC_agents(Node):
 
     
     def run_mission(self) :
-        
-        if self.start_mission_time is None:
-            self.start_mission_time = self.get_clock().now()
 
         if not self.mpc_solver.initialized :
             self.get_logger().info(f"MPC solver not initialized yet. Waiting for barrier messages...",throttle_duration_sec=3.0)
-            self.start_mission_time = self.get_clock().now() # reset time until system is ready to start
             return
         
         self.time = self.get_clock().now() - self.start_mission_time
@@ -311,7 +314,7 @@ class MPC_agents(Node):
         self.get_logger().info(f"{AnsiColor.BLUE} Gathering initiated {time_sec:.2f}s {AnsiColor.RESET}",throttle_duration_sec=5.0)
         
         if self.SYSTEM == WorkingMode.SIM:
-            k_p = 0.5
+            k_p = 0.05
             for idx, publisher in enumerate(self.twist_publishers):
                 msg = Twist()
                 agent_index  = self.DIM*idx
@@ -322,13 +325,13 @@ class MPC_agents(Node):
                 publisher.publish(msg)
         
         if self.SYSTEM == WorkingMode.REAL:
-            
+            k_p = 0.2
             for idx, publisher in enumerate(self.twist_publishers):
                 
                 pos = Position()
                 agent_index  = self.DIM*idx
-                pos.x = self.gathering_pos[0]
-                pos.y = self.gathering_pos[1]
+                pos.x = (self.gathering_pos[0] - self.pos[idx,0]) * k_p
+                pos.y = (self.gathering_pos[1] - self.pos[idx,1]) * k_p
                 pos.z = self.hoover_heights[idx]
                 pos.yaw = 0.
                 publisher.publish(pos)
@@ -359,9 +362,11 @@ class MPC_agents(Node):
            
         elif self.state == AgentState.READY:
             self.run_mission()
+            pass
         
         elif self.state == AgentState.GATHERING:
             self.gathering()
+            pass
             
         
     def update_full_state(self, twist, idx):
@@ -388,14 +393,10 @@ class MPC_agents(Node):
         req.group_mask = groupMask
         req.height     = targetHeight
         req.duration   = rclpy.duration.Duration(seconds=duration).to_msg()
+        # Wait until service call completes
         self.takeoff_services[idx].call_async(req)
 
-    def setpoint_callback(self, msg):
-        msg = PoseStamped()
-        msg.pose.linear.x = 0
-        msg.pose.linear.y = 0
-        msg.pose.linear.z = 0
-        msg.pose.angular.z = 0
+
     
     def wait_for_time(self):
         while self.get_clock().now().nanoseconds == 0:
@@ -411,14 +412,16 @@ def signal_handler(sig, frame):
 def main(args=None):
     rclpy.init(args=args)
 
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-
+    executor = MultiThreadedExecutor(num_threads=4)
     agents = MPC_agents()
-    rclpy.spin(agents)
 
-    agents.destroy_node()
-    rclpy.shutdown()
+    executor.add_node(agents)
+
+    try:
+        executor.spin()
+    finally:
+        agents.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == "__main__":
     main()

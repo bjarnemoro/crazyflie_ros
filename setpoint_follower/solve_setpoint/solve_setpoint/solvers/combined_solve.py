@@ -19,24 +19,30 @@ def vertices(dim):
     with side length 1, for dimension 2 or 3.
     """
     if dim == 2:
-        return [
-            np.array([-0.5, -0.5]),
-            np.array([-0.5,  0.5]),
-            np.array([ 0.5, -0.5]),
-            np.array([ 0.5,  0.5]),
+        vertices =  [
+            np.array([-1., -1.0]),
+            np.array([-1.,  1.0]),
+            np.array([ 1., -1.0]),
+            np.array([ 1.,  1.0]),
         ]
 
+        normalized_vertices = [v / np.linalg.norm(v) for v in vertices]
+        return normalized_vertices
+
     elif dim == 3:
-        return [
-            np.array([-0.5, -0.5, -0.5]),
-            np.array([-0.5, -0.5,  0.5]),
-            np.array([-0.5,  0.5, -0.5]),
-            np.array([-0.5,  0.5,  0.5]),
-            np.array([ 0.5, -0.5, -0.5]),
-            np.array([ 0.5, -0.5,  0.5]),
-            np.array([ 0.5,  0.5, -0.5]),
-            np.array([ 0.5,  0.5,  0.5]),
+        vertices =  [
+            np.array([-1., -1., -1.]),
+            np.array([-1., -1.,  1.]),
+            np.array([-1.,  1., -1.]),
+            np.array([-1.,  1.,  1.]),
+            np.array([ 1., -1., -1.]),
+            np.array([ 1., -1.,  1.]),
+            np.array([ 1.,  1., -1.]),
+            np.array([ 1.,  1.,  1.]),
         ]
+
+        normalized_vertices = [v / np.linalg.norm(v) for v in vertices]
+        return normalized_vertices
 
     else:
         raise ValueError("Dimension must be 2 or 3")
@@ -147,7 +153,7 @@ def solve_task_decomposition(tasks , task_paths: list[tuple[int,int]], BOX_WEIGH
     cycles = graph.find_all_cycles()
     logger.debug(f"Found {len(cycles)} cycles in the graph")
     for i, cycle in enumerate(cycles):
-        logger.debug(f"Cycle {i}: {cycle}")
+        logger.info(f"Cycle {i}: {cycle}")
 
     # add constraint on the cycle
     for cycle in cycles:
@@ -218,9 +224,10 @@ def solve_task_decomposition(tasks , task_paths: list[tuple[int,int]], BOX_WEIGH
             new_task = Task(
                 edges        = [u,v],
                 rel_position = e_value.flatten(),
-                size         = scale_value/np.sqrt(2),
+                size         = 2*scale_value/np.sqrt(2.),
                 timespan     = task.timespan,
-                period_num   = task.period_num
+                period_num   = task.period_num,
+                operator     = task.operator,
             )
             
             new_tasks.append(new_task)

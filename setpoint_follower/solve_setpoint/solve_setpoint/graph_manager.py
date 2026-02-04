@@ -86,4 +86,4 @@ class GraphManager:
         return np.all(self.online_status)
         
     def offline_agents(self):
-        return np.where(self.online_status==0)[0] + 1 # added plus 1 (agent 1 corresponds to index 0)
+        return np.where(self.online_status==0)[0] 

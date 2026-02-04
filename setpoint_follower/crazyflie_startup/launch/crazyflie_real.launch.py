@@ -1,65 +1,200 @@
+# Copyright 2022 Open Source Robotics Foundation, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import os
+import tempfile
+import yaml
 
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.actions import IncludeLaunchDescription
-from launch.actions import TimerAction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.substitutions import FindPackageShare
-
 from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
+from launch.utilities import perform_substitutions
+ 
 
+######################################################################
+##  Creation of crazyflie.yaml
+######################################################################
+
+
+def get_drones_from_config(config_path):
+    """
+    Load drone positions from a ROS 2 parameter YAML file.
+
+    Expected structure:
+      /**:
+        ros__parameters:
+          NUM_AGENTS: N
+          agent_1:
+            pos:  [ 2.0,   0.5,  0.0 ]
+            radio: 1
+
+          agent_2:
+            pos:  [ -2.0,   0.5,  0.0 ]
+            radio: 1
+
+
+    Args:
+      config_path (str): Path to YAML config file
+
+    Returns:
+      dict[int, list[float]]: { drone_index: [x, y, z] }
+    """
+    with open(config_path, "r") as f:
+        cfg = yaml.safe_load(f)
+
+    
+    if "/**" not in cfg:
+        raise RuntimeError("Missing '/**' root key in config")
+
+    params = cfg["/**"].get("ros__parameters", {})
+    
+    if params is None :
+        raise  RuntimeError("Current parameter file seems to be broken. Make sure that the keys are nested under ros__parameters")
+
+    agents = {}
+    for key in params.keys():
+        if key.startswith("agent_"):
+            # get agent id
+            agent_id = int(key.split("_")[1])
+            agents[agent_id] = params[key]
+
+    if not agents:
+        raise RuntimeError("No agents found in config file. It is not possible to give a file without agents specified")
+
+    return agents
+
+
+def crazyflie_uri(radio:int,channel: int, agent_id: int) -> str:
+    ## This function should be matched to the real hardware settings.
+    return f"radio://{radio}/{channel}/2M/E7E7E7E7{agent_id:02X}"
+
+def generate_crazyswarm_config( agents : dict[int,dict], dir_path: str) -> str:
+    
+    cfg = {
+        "fileversion": 3,
+        "robots": {},
+        "robot_types": {
+            "cf21": {
+                "motion_capture": {
+                    "tracking": "librigidbodytracker",
+                    "marker": "default_single_marker",
+                    "dynamics": "default"
+                },
+                "big_quad": False,
+                "battery": {"voltage_warning": 3.8, "voltage_critical": 3.7},
+            }
+        },
+        "all": {
+            "firmware_logging": {
+                "enabled": True,
+                "default_topics": {
+                    "pose": {"frequency": 10},
+                    "status": {"frequency": 1}
+                }
+            },
+            "firmware_params": {
+                "commander": {"enHighLevel": 1},
+                "stabilizer": {"estimator": 2, # kalman filter 
+                              "controller": 2},# PID , 2 # mellinger (for collision avoidance this is the recommended one)
+                "locSrv": {"extPosStdDev": 1e-3, "extQuatStdDev": 0.5e-1},
+                "colAv": {"enable": 1,
+                          "ellipsoidX": 0.20,
+                          "ellipsoidY": 0.20,
+                          "ellipsoidZ": 0.50
+                          },
+                # "posCtlPid":{"xVelMax": 1.0,
+                #               "yVelMax": 1.0,
+                #               "zVelMax": 1.0
+                #             }
+            },
+            "reference_frame": "mocap",
+            "broadcasts": {"num_repeats": 15, 
+                           "delay_between_repeats_ms": 1}
+        }
+    }
+
+    for index, agent_dict in agents.items():
+        name = f"crazyflie{index}"
+        cfg["robots"][name] = {
+            "enabled": True,
+            "uri": crazyflie_uri(agent_dict["radio"],agent_dict["channel"], index),
+            "initial_position": agent_dict["pos"],
+            "type": "cf21"
+        }
+    
+    out_file = os.path.join(dir_path, 'crazyflie_autogenerated.yaml')
+    with open(out_file, 'w') as f:
+        yaml.safe_dump(cfg, f, sort_keys=False)
+
+    return out_file
+
+
+
+def launch_setup(context, *args, **kwargs):
+
+    config_path = perform_substitutions(context, [MISSION_CONFIG]) # here the replacem,ent happens
+    drones      = get_drones_from_config(config_path)
+
+    for drone in drones.keys():
+        print("created drone:", drone)
+
+    crazyswarm_config_file = generate_crazyswarm_config(drones, SWARM_CONFIG_DIR)
+
+    nodes = []
+
+    return nodes
+
+
+
+#######################################################################
 
 def generate_launch_description():
     # Configure ROS nodes for launch
 
-    config = os.path.join(
-        get_package_share_directory('crazyflie_ros2_setpoint_follower'),
-        'config',
-        'config_real.yaml'
-        )
-
-    manager_node = Node(
-        package='solve_setpoint',
-        executable='manager',
-        name='manager_node',
-        output='screen',
-        parameters=[
-            {'robot_prefix': '/cf'},
-            {'use_sim_time': False},
-            config
-        ]
+    gz_ln_arg = DeclareLaunchArgument(
+        'gazebo_launch',
+        default_value='True'
     )
 
-    agent_node = Node(
-            package='solve_setpoint',
-            executable='agentMPC',
-            output='screen',
-            parameters=[
-                {'robot_prefix': '/cf'},
-                {'use_sim_time': False},
-                config
-            ]
-        )
+    mission_yaml = DeclareLaunchArgument(
+        'mission_yaml',
+        default_value='config.yaml',
+        description='Full path to the mission yaml file to load'
+    )
+
+    # LaunchConfiguration for dynamic values
+    m_yaml  = LaunchConfiguration('mission_yaml')
+
+    # Setup project paths
+    crazylie_setpoint_dir = get_package_share_directory('crazyflie_ros2_setpoint_follower')
+    crazyswarm_pkg        = get_package_share_directory('crazyflie') #TODO: FINISH by passing the created config file
+
+    global MISSION_CONFIG
+    global SWARM_CONFIG_DIR
+
+    MISSION_CONFIG   = PathJoinSubstitution([FindPackageShare('crazyflie_ros2_setpoint_follower'),'config','missions',m_yaml])
+    SWARM_CONFIG_DIR = os.path.join( crazylie_setpoint_dir, 'config', 'hardware')
+
+
     
-    barrier_service = Node(
-        package='barrier_builder',
-        executable='barrier_server',
-        name='barrier_service',
-        output='screen',
-        parameters=[
-            {'robot_prefix': '/barrier_service'},
-            {'use_sim_time': False},
-            config
-        ]
-    )
-
     return LaunchDescription([
-        agent_node,
-        barrier_service,
-        manager_node
+        mission_yaml,
+        OpaqueFunction(function=launch_setup),
         ])

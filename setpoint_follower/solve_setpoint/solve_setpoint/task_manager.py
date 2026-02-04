@@ -9,17 +9,23 @@ from dataclasses import dataclass
 from barrier_msg.msg import BMsg, TMsg
 
 from solve_setpoint.solvers.shortest_path import dijkstra
-from solve_setpoint.solvers.graph_search import build_graph, select_communication_inconsistent_tasks, decomposition_path_guesses
+from solve_setpoint.solvers.graph_search import build_graph, select_communication_inconsistent_tasks, list_decomposition_paths_per_task
 
 
 class Task:
     __counter = 0
-    def __init__(self, timespan: list[int, int], edges: list[int, int], rel_position: list[float, float] | list[float, float, float], size: float, period_num:int):
+    def __init__(self, timespan: list[int, int], 
+                       edges: list[int, int], 
+                       rel_position: list[float, float] | list[float, float, float], 
+                       size: float, 
+                       period_num:int,
+                       operator: str = "always"):
         self.timespan     = timespan
         self.edges        = edges
         self.rel_position = rel_position
         self.size         = size
         self.period_num   = period_num
+        self.operator     = operator
         self.ID           = Task.__counter
         Task.__counter  += 1
 
@@ -113,20 +119,25 @@ class TaskManager():
         """
 
         active_tasks = self.get_active_tasks(current_time)
+        active_edge_tasks = [task for task in active_tasks if task.edges[0] != task.edges[1]]
+        active_self_tasks = [task for task in active_tasks if task.edges[0] == task.edges[1]]
 
-        # TODO: (Add this outside this function) check that there is only one task per edge
-        for i, taski in enumerate(active_tasks):
-            for j, taskj in enumerate(active_tasks):
+        for i, taski in enumerate(active_edge_tasks):
+            for j, taskj in enumerate(active_edge_tasks):
                 if i < j:
                     if taski.edges == taskj.edges or taski.edges == (taskj.edges[1], taskj.edges[0]):
-                        raise Exception("Multiple tasks assigned to the same edge at priod {}".format(current_time))
+                        raise Exception("Multiple tasks assigned to the same edge {} at priod {}".format(taski.edges,taski.period_num))
 
-
-        possible_paths, decomposition_needed  = self.compute_task_paths(active_tasks, comm_edges, log) # for each active task it computes the decomposition path. 
+        possible_paths, decomposition_needed, is_disconnected  = self._compute_task_paths(active_edge_tasks, comm_edges, log) # for each active task it computes the decomposition path. 
         
-        return active_tasks, possible_paths, decomposition_needed
+        # add self tasks 
+        for task in active_self_tasks:
+            for decomption_attempt in  possible_paths :
+                decomption_attempt.append([task.edges])
         
-    def compute_task_paths(self, active_tasks: list[Task], comm_edges, log):
+        return active_self_tasks, active_edge_tasks, possible_paths, decomposition_needed, is_disconnected
+        
+    def _compute_task_paths(self, active_tasks: list[Task], comm_edges, log):
         """
         Divides the tasks in consistent and inconsistent tasks based on the current communication graph.
         A task is consistent if 
@@ -137,32 +148,42 @@ class TaskManager():
         graph                                = build_graph(comm_edges, active_tasks)
         inconsistent_tasks, consistent_tasks = select_communication_inconsistent_tasks(graph, active_tasks, self.COMM_DISTANCE, log)
         
+        decomposition_needed = False 
+        is_diconnected       = False
+
+
         if not len(inconsistent_tasks):
-            decomposition_needed     = False 
             decomposition_paths_dict = {}
-        else:
-            decomposition_needed                 = True
-            decomposition_paths_dict = decomposition_path_guesses(inconsistent_tasks, graph, self.COMM_DISTANCE, log) # returns a list of possible decomposition
+            return decomposition_paths_dict, decomposition_needed, is_diconnected
+       
         
+        decomposition_needed         = True
+        decomposition_paths_dict     = list_decomposition_paths_per_task(inconsistent_tasks, graph, self.COMM_DISTANCE, log) # returns a list of possible decomposition
         possible_decomposition_paths = []
-        for _ in range(100) : # try multiple times to find decomposition paths
-            paths = []
+        attempts = 100
+        
+        for _ in range(attempts) : # try multiple times to find decomposition paths
+            decomposition_paths_attempt = []
             for task in active_tasks:
                 if task in consistent_tasks:
-                    paths.append([task.edges])
+                    decomposition_paths_attempt.append([task.edges])
                 if task in inconsistent_tasks:
                     possible_paths = decomposition_paths_dict[task.ID]
-                    # sample a path biasing fofr shorter paths
-                    idx = int(np.random.exponential(scale=1.0))
-                    idx = min(idx, len(possible_paths) - 1)
-                    path = possible_paths[idx]
                     
-                    path_list = [[path[i], path[i+1]] for i in range(len(path)-1)]
-                    paths.append(path_list)
+                    if len(possible_paths) == 0:
+                        path = []
+                        decomposition_paths_attempt.append(path)
+                        is_diconnected = True
+                    else :
+                        # sample a path biasing for shorter paths
+                        idx = int(np.random.exponential(scale=1.0))
+                        idx = min(idx, len(possible_paths) - 1)
+                        path = [[possible_paths[idx][i], possible_paths[idx][i+1]] for i in range(len(possible_paths[idx])-1)]
+                        decomposition_paths_attempt.append(path)
             
-            possible_decomposition_paths.append(paths)
+            possible_decomposition_paths.append(decomposition_paths_attempt) # define list of n = attempts decomposition path. Each attempt defined a path of decomositoon for the task
 
-        return possible_decomposition_paths, decomposition_needed 
+        return possible_decomposition_paths, decomposition_needed , is_diconnected
 
     def load_task_path(self, task_path):
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -201,7 +222,7 @@ class TaskManager():
         tmsg.end     = float(task.timespan[1])
         tmsg.edge_i  = int(task.edges[0])
         tmsg.edge_j  = int(task.edges[1])
-        tmsg.type    = "always"
+        tmsg.type    = task.operator
 
         return tmsg
 

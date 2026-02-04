@@ -33,17 +33,8 @@ class STLMPC:
         self.squares = []
         self.num_tv = 0
 
-        # Single-integrator dynamics
-        A = np.zeros((self.states_dim, self.states_dim))
-        B = np.eye(self.inputs_dim)
-        C = np.eye(self.states_dim)
-        D = np.zeros((self.states_dim, self.inputs_dim))
-
-        system_discrete = cont2discrete((A, B, C, D), dt)
-        A_d, B_d, _, _, _ = system_discrete
-
-        self.A_d = csc_matrix(A_d)
-        self.B_d = csc_matrix(B_d)
+        self.A_d = np.eye(self.states_dim)
+        self.B_d = dt * np.eye(self.states_dim)
 
     def agent_index(self, agent_id: int):
         return agent_id * self.states_dim
@@ -119,7 +110,7 @@ class STLMPC:
                 constraints += [ cp.sum_squares(C @ self.x[:, k]) <= self.communication_distance**2 + self.comm_slack[k] ]
 
         # Objective
-        objective = cp.Minimize(1e3 * cp.sum_squares(self.task_slack) +  cp.sum_squares(self.u) + 1e1 * cp.sum_squares(self.comm_slack))
+        objective = cp.Minimize(1e2 * cp.sum_squares(self.task_slack) +  1e3*cp.sum_squares(self.u) + 1e1 * cp.sum_squares(self.comm_slack))
 
         self.prob = cp.Problem(objective, constraints)
 
@@ -172,8 +163,10 @@ def relative_matrix(agent_dim, num_agents, index_j, index_i):
 
     j_start = index_j * agent_dim
     i_start = index_i * agent_dim
-
-    C[:, j_start:j_start + agent_dim] = np.eye(agent_dim)
-    C[:, i_start:i_start + agent_dim] = -np.eye(agent_dim)
-
+    
+    if index_j != index_i:
+        C[:, j_start:j_start + agent_dim] = np.eye(agent_dim)
+        C[:, i_start:i_start + agent_dim] = -np.eye(agent_dim)
+    else :
+        C[:, j_start:j_start + agent_dim] = np.eye(agent_dim) # just a selection matrix
     return C

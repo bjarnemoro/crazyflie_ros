@@ -18,8 +18,63 @@ from solve_setpoint.task_manager import TaskManager, Task
 from solve_setpoint.solvers.combined_solve import solve_task_decomposition
 from solve_setpoint.utils import WorkingMode, AgentState, ManagerState, AnsiColor
 
+import json
+from ollama import chat
+from std_msgs.msg import String
 
-class Manager(Node):
+SYSTEM_PROMPT = """ You translate natural language commands into robot formation task specifications among agents.
+
+CRITICAL OUTPUT RULES:
+- Output ONLY valid JSON.
+- Do NOT include markdown, code fences, comments, or explanations.
+- The output must start with '{' and end with '}'.
+
+Schema:
+{
+  "tasks": [
+    {
+      "rel_position": [float, float],
+      "size": float,
+      "period_num": int,
+      "edges": [int, int],
+      "operator": string,
+      "timespan": [int, int]
+    }
+  ]
+}
+
+
+GENERAL RULES:
+- Use ONLY agent indices explicitly mentioned in the user input.
+- "edges" contains exactly two integers [i,j] to define a relative formation from i to j.
+  - For single-agent tasks, repeat the same index twice.
+- "rel_position" must be a list of two floats representing the relative formation from i to j. The norm should not exceed 3 and should not be below 0.3.
+- "size" default is 0.1 meters if not specified.
+- "operator" can be only "always" or "eventually" (default: "always").
+- "timespan" is [start, end] in seconds, using integer approximations.
+- Each distinct timespan corresponds to a unique period_num.
+- period_num starts at 0 and increases sequentially.
+- Timespans must be non-overlapping and sequential.
+
+LOGICAL CONNECTIVES:
+- AND → tasks share the same timespan and period_num.
+- OR → choose one option and discard the other.
+- "A then B" → two subsequent periods with different timespans.
+
+TIME HANDLING:
+- If timespans are not specified, create timespans of 10 seconds each.
+- Ensure consecutive timespans are separated by at least 20 seconds.
+
+FORMATION RULES:
+- When asked for a rigid formation among multiple agents (e.g., triangle, square),
+  create multiple pairwise tasks whose combined rel_positions realize the formation.
+  Make sure the formation can be closed (i.e., the relative formations sum to 0 and the sequence of edges form a path of agents of the form [[i,j],[j,k] .. [l,i]]).
+- Do NOT name the formation in the output.
+- Do NOT invent geometry outside the allowed rel_position list.
+"""
+
+
+class llmManager(Node):
     """
     The manager handles the task graph and agent graph
     its main functions are setting the setpoint for the agents
@@ -55,26 +110,25 @@ class Manager(Node):
         self.BOX_WEIGHT     = self.get_parameter("BOX_WEIGHT").value
         self.NUM_AGENTS     = len(self.AGENTS_INDICES)
 
+        self.get_logger().info("agents indices: {}".format(self.AGENTS_INDICES))
+
+        
+        self.tasks   = []
+        self.periods = {}
 
         ##
         self.start_time = None
         self.ready_count = 0
         self.current_tasks = []
+        self.barrier_request_id = 0
 
-        #setup the tasks that are to be done
-        self.tasks, self.periods = self._load_tasks()
-        self.get_logger().info(f"Loaded {len(self.tasks)} tasks")
-
-        #setup the graph manager and task manager
-        self.graph_manager = GraphManager(self.NUM_AGENTS, self.COMM_DISTANCE)
-        self.task_manager = TaskManager(self.DIM, self.COMM_DISTANCE, self.periods, self.tasks)
-
-        self.recalc_times    = self.task_manager.recalculate_at()
         self.triggered_times = set()
 
         #setup all the subscribers and publishers
 
         self.drones_names = ['{}{}'.format("/crazyflie", i) for i in  self.AGENTS_INDICES]
+
+        self.graph_manager = GraphManager(self.NUM_AGENTS, self.COMM_DISTANCE)
         
         self.odom_subscribers     = []
         self.edge_pub                = self.create_publisher(Int32MultiArray, "/graph_edges", 10)
@@ -101,6 +155,17 @@ class Manager(Node):
 
         #start the main loops of the system with a timer method
         self.timer = self.create_timer(self.MANAGER_TIMER, self.mainloop)
+
+
+        # callback to llm
+        self.sub = self.create_subscription(
+            String,
+            '/operator_command',
+            self.on_operator_command_callback,
+            10
+        )
+
+        ####################################################
             
         #set the starting state
         self.manager_state = ManagerState.WAITING_FOR_ODOMETRY
@@ -108,7 +173,16 @@ class Manager(Node):
         modes      = {0: "simulation", 1: "real"}
         self.get_logger().info(f"Working in {self.SYSTEM.name} mode. Manager state {self.manager_state.name} !!")
 
-    def on_new_barrier(self, future):
+    def on_new_barrier(self, future,req_id):
+
+    
+        if req_id != self.barrier_request_id:
+            self.get_logger().warn(
+                "Ignoring stale barrier response"
+            )
+            return
+
+
         try:
             response = future.result()
             msg = BMsglist()
@@ -169,7 +243,7 @@ class Manager(Node):
             self.recalc_times.pop(0) # empty list as tasks are finished
             if len(self.recalc_times): # when we reach the last recalculation time then the tasks are finnished
                 self.get_logger().info(f"{AnsiColor.BOLD_GREEN} Recaculating task at recalculation time : {current_time}" \
-                                    f".Remaining recalculation times: {self.recalc_times} {AnsiColor.RESET}")
+                                    f". Remaining recalculation times: {self.recalc_times} {AnsiColor.RESET}")
                 self.recalculate_tasks(current_time)
         
         if self.agent_state == AgentState.GATHERING:
@@ -197,16 +271,16 @@ class Manager(Node):
             self.active_agents_pub.publish(msg)
 
 
-    
-
     def request_barrier(self, tasks):
         req = BCompSrv.Request()
         for task in tasks:
             req.messages.append(self.task_manager.get_tmsg(task))
 
+        self.barrier_request_id += 1
+        req_id = self.barrier_request_id
         future = self.barrier_client.call_async(req)
-        future.add_done_callback(self.on_new_barrier)
-
+        future.add_done_callback(
+            lambda f, rid=req_id: self.on_new_barrier(f, rid))
 
 
     def recalculate_tasks(self, current_time):
@@ -220,7 +294,7 @@ class Manager(Node):
         active_self_tasks, active_edge_tasks, possible_task_paths, decomposition_needed, is_disconnected = self.task_manager.get_active_tasks_and_decomposition_paths(current_time, comm_edges, self.get_logger())
 
         if not decomposition_needed:
-            self.get_logger().info(f"{AnsiColor.BOLD_GREEN} No decompostion needed. {AnsiColor.RESET}")
+            self.get_logger().info(f"{AnsiColor.BOLD_GREEN} No decomposition needed! requesting barriers {AnsiColor.RESET}")
             self.current_tasks = active_self_tasks + active_edge_tasks
             self.request_barrier(active_self_tasks + active_edge_tasks)
             return 
@@ -266,7 +340,11 @@ class Manager(Node):
             if self.graph_manager.are_all_agents_online():
                 #change state
                 self.get_logger().info(f"{AnsiColor.BOLD_GREEN}Received odom message from all agents, changing manager state to: {ManagerState.READY.name} {AnsiColor.RESET}")
-                self.manager_state = ManagerState.READY
+                
+                if len(self.tasks) == 0:
+                    self.manager_state = ManagerState.WAITING_FOR_TASKS
+                else:
+                    self.manager_state = ManagerState.READY
 
                 #publish the initial communication graph
                 self.update_and_publish_communication_graph()
@@ -276,11 +354,19 @@ class Manager(Node):
                 missing_agents_id = [self.AGENTS_INDICES[i] for i in missing_agents]
                 self.get_logger().info(f"Waiting for odom messages from agents: {missing_agents_id}. Missing agents: {missing_agents}",throttle_duration_sec=5.0)
 
+        elif self.manager_state == ManagerState.WAITING_FOR_TASKS:
+            self.get_logger().info(f"{AnsiColor.BOLD_GREEN} MPC currently in mode {self.agent_state.name}. {AnsiColor.RESET}",throttle_duration_sec=5.0)
+            if len(self.tasks) > 0:
+                self.get_logger().info(f"{AnsiColor.BOLD_GREEN} Received tasks from operator, changing manager state to: {ManagerState.READY.name} {AnsiColor.RESET}")
+                self.manager_state = ManagerState.READY
+            else:
+                self.get_logger().info(f"{AnsiColor.BOLD_YELLOW} No tasks to perform yet. Waiting for operator command. {AnsiColor.RESET}",throttle_duration_sec=5.0)
+        
+        
         elif self.manager_state == ManagerState.READY and (self.agent_state == AgentState.READY or self.agent_state == AgentState.GATHERING):
+    
+            self.get_logger().info(f"{AnsiColor.BOLD_GREEN} Working on task execution. MPC currently mode {self.agent_state.name}. {AnsiColor.RESET}",throttle_duration_sec=5.0)
 
-            
-            self.get_logger().info(f"{AnsiColor.BOLD_GREEN} MPC currently mode {self.agent_state.name}. {AnsiColor.RESET}",throttle_duration_sec=5.0)
-      
             if self.start_time is None: # time is considered since the start of the mission
                 self.start_time = self.get_clock().now()
             
@@ -296,88 +382,99 @@ class Manager(Node):
         elif self.agent_state == AgentState.LANDING :
             self.get_logger().info(f"{AnsiColor.BOLD_GREEN} MPC landing mode . {AnsiColor.RESET}",throttle_duration_sec=5.0)
 
-    def _load_tasks(self):
-        """
-        Load TASKS from ROS 2 parameters using prefix parsing.
-        taken from https://gist.github.com/agrueneberg/d76fff493753fa531f1b5d33be0f07ed
-        """
-
-        params_task = self.get_parameters_by_prefix('TASKS')    # e.g., {"task_3.timespan":[1,2],"task_3.rel_position":[1,2], "task_2.rel_position"...}
-        params_period = self.get_parameters_by_prefix('PERIODS')# e.g., {"period_1":[1,2],"period_2":[1,2], ...}
-
-        if not params_task:
-            self.get_logger().warn("No TASKS parameters found")
-            return []
-
-        tasks_by_name = {}
-
-        for full_key, param in params_task.items():
-            # Example: "task_3.timespan"
-            task_name, field = full_key.split(".", 1)
-
-            tasks_by_name.setdefault(task_name, {})[field] = param.value
-
-            self.get_logger().info(
-                f"Loaded param: {task_name}.{field} = {param.value}"
-            )
+    
+    
+    def on_operator_command_callback(self, msg: String):
         
-        periods = []
-        
-        for full_key, param in params_period.items():
-            # Example: "period_1" -> period are assumed to be given in order
-            _, num = full_key.split("_", 1)
-            num = int(num)
-            periods.append(param.value)
+        self.get_logger().info(f"Received command from human operator: {msg.data}")
 
-            self.get_logger().info(
-                f"Loaded period: {num} = {param.value}"
-            )
+        self.tasks = []
+        self.periods = set()
 
-        tasks = []
-        for name, data in tasks_by_name.items():
-            # remap edge to to the agent indices. Agents in the algorithm go from 1 to n
-            # but user might decide different indices in the hardware setup 
-            
-            try :
-                data['edges'] = (self.AGENTS_INDICES.index(data['edges'][0])+1, self.AGENTS_INDICES.index(data['edges'][1])+1)
-            except ValueError as e:
-                raise ValueError(f"Task {name} has edges {data['edges']} which include agent indices not in AGENTS_INDICES parameter {self.AGENTS_INDICES}. Please make sure all agents involved in tasks are included in AGENTS_INDICES.") from e
+        try:
+            raw_text = self.query_ollama(msg.data).strip()
+            self.get_logger().info(f"Raw LLM output: {repr(raw_text)}")
 
+            clean_text = strip_code_fences(raw_text)
+            data = json.loads(clean_text)
+
+            if "tasks" not in data:
+                raise ValueError("No 'tasks' field in LLM output")
+
+        except Exception as e:
+            self.get_logger().error(f"LLM processing failed: {e}")
+            return
+
+        self.get_logger().info(f"Parsed LLM output: {raw_text}")
+
+        for t in data["tasks"]:
             try:
-                tasks.append(Task(
-                                timespan    = periods[data['period_num']],
-                                edges       = data['edges'],
-                                rel_position= data['rel_position'],
-                                size        = data['size'],
-                                period_num  = data['period_num'],
-                                operator    = data.get('operator', 'always')
-                                )
-                            )
-            except Exception as e:
-                raise e
+                t['edges'] = (
+                    self.AGENTS_INDICES.index(t['edges'][0]) + 1,
+                    self.AGENTS_INDICES.index(t['edges'][1]) + 1
+                )
+            except ValueError as e:
+                self.get_logger().error(
+                    f"Invalid agent index in task edges {t['edges']}"
+                )
+                return
 
-        # check phase : make sure periods are ordered and not overlapping
-        for num, period in enumerate(periods):
-            for other_num, other_period in enumerate(periods):
-                if num < other_num:
-                    if not (period[1] <= other_period[0]):
-                        self.get_logger().error(
-                            f"Periods {num} and {other_num} are overlapping or are unordred. PLease make sure the period are orderd in ascending order: {period} and {other_period}. Please provide "
-                        )
-        self.get_logger().info('\033[32m'+ f" All tasks loaded successfully !" + '\033[0m')
-        return tasks, periods
+            self.tasks.append(Task(
+                timespan=[int(x) for x in t["timespan"]],
+                edges=[int(x) for x in t["edges"]],
+                rel_position=[float(x) for x in t["rel_position"]],
+                size=float(t["size"]),
+                period_num=int(t["period_num"]),
+                operator=t["operator"]
+            ))
 
-    def wait_for_time(self):
-        while self.get_clock().now().nanoseconds == 0:
-            self.get_logger().info("Waiting for valid ROS time...")
-            rclpy.spin_once(self, timeout_sec=0.1)
+            self.periods.add((t["timespan"][0], t["timespan"][1]))
+        
+        self.periods = sorted(list(self.periods), key=lambda x: x[0])
 
+        self.get_logger().info(f"periods : {self.periods}")
 
+        # print tasks 
+        for task in self.tasks:
+            self.get_logger().info(f"{AnsiColor.BOLD_GREEN} Loaded Task : Agents {task.edges} , rel_position {task.rel_position} , size {task.size} , timespan {task.timespan} {AnsiColor.RESET}")
+
+        # Setup task manager
+        self.task_manager = TaskManager(
+            self.DIM,
+            self.COMM_DISTANCE,
+            self.periods,
+            self.tasks
+        )
+        self.recalc_times = self.task_manager.recalculate_at()
+
+        self.get_logger().info("Tasks successfully updated from Ollama")
+
+    def query_ollama(self, user_text: str) -> str:
+        response = chat(
+            model='gemma3:27b',
+            messages=[
+                {'role': 'system', 'content': SYSTEM_PROMPT},
+                {'role': 'user', 'content': user_text},
+            ],
+            options={
+                "temperature": 0.0,
+                "num_predict": 1000
+            }
+        )
+        return response['message']['content']
 
 def signal_handler(sig, frame):
     print("Shutdown signal received, cleaning up...")
     rclpy.shutdown()
     sys.exit(0)
+
+def strip_code_fences(text: str) -> str:
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        # remove first and last fence
+        return "\n".join(lines[1:-1]).strip()
+    return text
 
 
 def main(args=None):
@@ -386,7 +483,7 @@ def main(args=None):
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    manager = Manager()
+    manager = llmManager()
 
     rclpy.spin(manager)
     manager.destroy_node()

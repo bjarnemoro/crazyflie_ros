@@ -17,6 +17,7 @@ class ManagerState(IntEnum):
     WAITING_FOR_ODOMETRY = 0
     READY                = 1
     ERROR                = 2
+    WAITING_FOR_TASKS    = 3
 
 class AnsiColor(str, Enum):
     RESET = "\033[0m"

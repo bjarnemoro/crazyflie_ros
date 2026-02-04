@@ -1,21 +1,14 @@
 /**: 
   ros__parameters:
-    robot_prefix: '/crazyflie'
-    use_sim_time: true
-
-    SYSTEM: 0 #0: SIM or 1: REAL
+  
     DIM: 2
     NUM_AGENTS: 10
-
-    MANAGER_TIMER: 0.8
+    MAIN_TIMER: 0.1
+    SETPOINT_TIMER: 0.1
     AGENT_TIMER: 0.05  # frequency of the MPC 
     SPEED: 0.4
     BOX_WEIGHT: 10
     COMM_DISTANCE: 3.
-
-    SIDE_LENGTH: 10.0
-    ARENA_SIZE: 100.0
-    MAX_INPUT: 10.0
     HOOVERING_HEIGHT: 1. #alitude at which the drones move nominally
 
     POSITIONS:

@@ -4,11 +4,13 @@ import signal
 import numpy as np
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
+from geometry_msgs.msg import PoseStamped
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
 
 from std_msgs.msg import Int32MultiArray
 from barrier_msg.msg import TMsglist
+from solve_setpoint.utils import WorkingMode, AgentState, ManagerState, AnsiColor
 
 def line_strip(time, marker_id, pos1, pos2, color):
     marker = Marker()
@@ -52,9 +54,9 @@ def sphere(time, marker_id, pos, color):
     marker.pose.orientation.z = 0.0
     marker.pose.orientation.w = 1.0
 
-    marker.scale.x = 1.0
-    marker.scale.y = 1.0
-    marker.scale.z = 1.0
+    marker.scale.x = 0.3
+    marker.scale.y = 0.3
+    marker.scale.z = 0.3
 
     marker.color.r = color[0]
     marker.color.g = color[1]
@@ -116,36 +118,33 @@ class GraphMarkerPublisher(Node):
     def __init__(self):
         super().__init__('graph_marker_publisher')
 
-        self.declare_parameter('robot_prefix', '/crazyflie')
-        self.declare_parameter("SYSTEM", 2)
-        self.declare_parameter("DIM", 10)
-        self.declare_parameter("NUM_AGENTS", 10)
-        self.declare_parameter("SPEED", 0.4)
-        self.declare_parameter("AGENT_TIMER", 0.1)
-        self.declare_parameter("HOOVERING_HEIGHT",1.0)
-        self.declare_parameter("COMM_DISTANCE", 1.0)
+        self.declare_parameter("backend", "sim")
+        self.declare_parameter("AGENTS_INDICES", [1])
 
-        self.robot_prefix = self.get_parameter('robot_prefix').value
-        self.SYSTEM = self.get_parameter("SYSTEM").value
-        self.DIM = self.get_parameter("DIM").value
-        self.SPEED = self.get_parameter("SPEED").value
-        self.NUM_AGENTS = self.get_parameter("NUM_AGENTS").value
-        self.AGENT_TIMER = self.get_parameter("AGENT_TIMER").value
-        self.HOOVERING_HEIGHT = self.get_parameter("HOOVERING_HEIGHT").value
-        self.COMM_DISTANCE = self.get_parameter("COMM_DISTANCE").value
+        backend            = self.get_parameter("backend").value
+        if backend == "sim":
+            self.SYSTEM = WorkingMode.SIM
+        elif backend == "hardware":
+            self.SYSTEM = WorkingMode.REAL
+
+
+        self.AGENTS_INDICES = self.get_parameter("AGENTS_INDICES").value
+        self.NUM_AGENTS     = len(self.AGENTS_INDICES)
 
         self.publisher      = self.create_publisher(MarkerArray, 'visualization_marker', 10)
         self.task_publisher = self.create_publisher(MarkerArray, 'task_visualization_marker', 10)
         self.timer          = self.create_timer(0.1, self.timer_callback)
 
-        
+    
+        self.drones_names = ['{}{}'.format("/crazyflie", i) for i in  self.AGENTS_INDICES]
+        odom_name   = {WorkingMode.SIM: "/odom", WorkingMode.REAL: "/pose"}
+        odom_type   = {WorkingMode.SIM: Odometry, WorkingMode.REAL: PoseStamped}
 
-        self.drones = ['/crazyflie{}'.format(i) for i in range(1,self.NUM_AGENTS+1)]
         self.odom_subscribers = []
-        for i, drone in enumerate(self.drones):
-            callback = lambda msg, idx=i: self.pos_callback(msg, idx)
+        for jj,drone in enumerate(self.drones_names):
+            callback = lambda msg, idx=jj:self.pos_callback(msg, idx)
             self.odom_subscribers.append(self.create_subscription(
-                Odometry, drone + '/odom', callback, 10))
+                odom_type[self.SYSTEM], drone + odom_name[self.SYSTEM], callback, 10))
 
         self.drone_pos = np.zeros((self.NUM_AGENTS, 3))
         self.edges = []
@@ -202,7 +201,7 @@ class GraphMarkerPublisher(Node):
             time = self.get_clock().now().to_msg()
             pos = self.drone_pos[i] + np.array([0.0, 0.0, 0.2])
             color = [0.0, 0.0, 1.0]
-            marker = text_marker(time, i, pos, i+1, color)
+            marker = text_marker(time, i, pos, self.AGENTS_INDICES[i], color)
             marker_array.markers.append(marker)
 
 
@@ -226,11 +225,21 @@ class GraphMarkerPublisher(Node):
   
         self.task_publisher.publish(marker_array)
 
-
+    
     def pos_callback(self, msg, idx):
-        self.drone_pos[idx][0] = msg.pose.pose.position.x
-        self.drone_pos[idx][1] = msg.pose.pose.position.y
-        self.drone_pos[idx][2] = msg.pose.pose.position.z
+        """
+        set the position of an agent by index. Index starts from 1 to N_agents so 
+        we need to subtract 1 to access the array
+        """
+        if type(msg) == Odometry:
+            self.drone_pos[idx][0] = msg.pose.pose.position.x
+            self.drone_pos[idx][1] = msg.pose.pose.position.y
+            self.drone_pos[idx][2] = msg.pose.pose.position.z
+
+        elif type(msg) == PoseStamped:
+            self.drone_pos[idx][0] = msg.pose.position.x
+            self.drone_pos[idx][1] = msg.pose.position.y
+            self.drone_pos[idx][2] = msg.pose.position.z
 
     def set_edges(self, msg):
         data = msg.data
