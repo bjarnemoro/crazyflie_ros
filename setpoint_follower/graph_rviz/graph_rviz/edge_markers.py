@@ -54,14 +54,14 @@ def sphere(time, marker_id, pos, color):
     marker.pose.orientation.z = 0.0
     marker.pose.orientation.w = 1.0
 
-    marker.scale.x = 0.3
-    marker.scale.y = 0.3
-    marker.scale.z = 0.3
+    marker.scale.x = 0.2
+    marker.scale.y = 0.2
+    marker.scale.z = 0.2
 
     marker.color.r = color[0]
     marker.color.g = color[1]
     marker.color.b = color[2]
-    marker.color.a = 0.2
+    marker.color.a = 0.1
 
 
     return marker
@@ -113,6 +113,63 @@ def text_marker(time, marker_id, pos, agent_id, color):
     marker.text = "CF{}".format(agent_id)
 
     return marker
+
+
+def arrow_marker(time, marker_id, agent_i_pos, i_to_j_formation, color):
+    marker = Marker()
+    marker.header.frame_id = "world"
+    marker.header.stamp = time
+    marker.ns = "task_arrows"
+    marker.id = marker_id
+    marker.type = Marker.ARROW
+    marker.action = Marker.ADD
+
+    marker.scale.x = 0.03   # shaft diameter
+    marker.scale.y = 0.06   # head diameter
+    marker.scale.z = 0.1    # head length
+
+    marker.color.r = color[0]
+    marker.color.g = color[1]
+    marker.color.b = color[2]
+    marker.color.a = 1.0
+
+    p1 = Point(x=agent_i_pos[0], y=agent_i_pos[1], z=agent_i_pos[2])
+    p2 = Point(x=agent_i_pos[0] + i_to_j_formation[0], 
+               y=agent_i_pos[1] + i_to_j_formation[1], 
+               z=agent_i_pos[2] + i_to_j_formation[2])
+
+    marker.points.append(p1)
+    marker.points.append(p2)
+
+    return marker
+
+
+def cube_marker(time, marker_id, center, size, color):
+    marker = Marker()
+    marker.header.frame_id = "world"
+    marker.header.stamp = time
+    marker.ns = "task_boxes"
+    marker.id = marker_id
+    marker.type = Marker.CUBE
+    marker.action = Marker.ADD
+
+    marker.pose.position.x = center[0]
+    marker.pose.position.y = center[1]
+    marker.pose.position.z = center[2]
+
+    marker.pose.orientation.w = 1.0
+
+    marker.scale.x = size[0]*2
+    marker.scale.y = size[1]*2
+    marker.scale.z = size[2]*2
+
+    marker.color.r = color[0]
+    marker.color.g = color[1]
+    marker.color.b = color[2]
+    marker.color.a = 0.2  # semi-transparent
+
+    return marker
+
 
 class GraphMarkerPublisher(Node):
     def __init__(self):
@@ -224,6 +281,76 @@ class GraphMarkerPublisher(Node):
                 marker_array.markers.append(marker)
   
         self.task_publisher.publish(marker_array)
+
+
+        ################################################
+        # Draw task formations (arrow + box)
+        ################################################
+
+        task_marker_array = MarkerArray()
+        current_task_ids = set()
+
+        for k, task in enumerate(self.task_msgs):
+
+            i = task.edge_i
+            j = task.edge_j
+
+            # agent positions
+            pos_i = self.drone_pos[i-1]
+            pos_j = self.drone_pos[j-1]
+            relative_pos = np.append(np.array(task.center),0.0) # add z=0 for 3D visualization
+
+            time = self.get_clock().now().to_msg()
+
+            # unique ids
+            arrow_id = 1000 + k
+            box_id   = 2000 + k
+
+            # Arrow i -> j
+            arrow = arrow_marker(
+                time,
+                arrow_id,
+                pos_i,
+                relative_pos,
+                color=[1.0, 1.0, 0.0]  # yellow
+            )
+
+            # Box
+            cube = cube_marker(
+                time,
+                box_id,
+                pos_i + relative_pos,
+                task.size,
+                color=[0.0, 1.0, 1.0]  # cyan
+            )
+
+            task_marker_array.markers.append(arrow)
+            task_marker_array.markers.append(cube)
+
+            current_task_ids.add(arrow_id)
+            current_task_ids.add(box_id)
+
+
+        # Delete old markers
+        if hasattr(self, "prev_task_ids"):
+            for old_id in self.prev_task_ids:
+                if old_id not in current_task_ids:
+                    delete_marker = Marker()
+                    delete_marker.header.frame_id = "world"
+                    delete_marker.header.stamp = self.get_clock().now().to_msg()
+                    delete_marker.id = old_id
+
+                    if old_id < 2000:
+                        delete_marker.ns = "task_arrows"
+                    else:
+                        delete_marker.ns = "task_boxes"
+
+                    delete_marker.action = Marker.DELETE
+                    task_marker_array.markers.append(delete_marker)
+
+        self.prev_task_ids = current_task_ids
+
+        self.publisher.publish(task_marker_array)
 
     
     def pos_callback(self, msg, idx):

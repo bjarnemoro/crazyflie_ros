@@ -17,6 +17,7 @@ from launch.utilities import perform_substitutions
 
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from launch.actions import TimerAction
 
 
 ###############################################################################################################
@@ -231,5 +232,10 @@ def generate_launch_description():
         gazebo_arg,
         mission_yaml,
         gz_sim,
-        OpaqueFunction(function=launch_setup),
+        TimerAction(
+        period=7.0,
+        actions=[
+            OpaqueFunction(function=launch_setup)
+            ],
+        ),
     ])

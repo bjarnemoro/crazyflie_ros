@@ -29,6 +29,20 @@ class Task:
         self.ID           = Task.__counter
         Task.__counter  += 1
 
+    def to_task_msg(self):
+        tmsg = TMsg()
+        
+        tmsg.center.extend([ i for i in self.rel_position])
+        tmsg.size.extend([max(2*self.size,0.1) for _ in range(len(self.rel_position) * 2)])
+        
+        tmsg.start   = float(self.timespan[0])
+        tmsg.end     = float(self.timespan[1])
+        tmsg.edge_i  = int(self.edges[0])
+        tmsg.edge_j  = int(self.edges[1])
+        tmsg.type    = self.operator
+
+        return tmsg
+
 class TaskManager():
     def __init__(self, dim, comm_dist, periods: list[tuple[int,int]], tasks=None, task_path=None):
         """

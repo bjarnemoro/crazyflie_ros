@@ -105,7 +105,7 @@ class SimpleGraph:
 
         return cycles
                 
-def solve_task_decomposition(tasks , task_paths: list[tuple[int,int]], BOX_WEIGHT, COMM_DISTANCE, logger) -> bool:
+def solve_task_decomposition(tasks , task_paths: list[tuple[int,int]], BOX_WEIGHT, COMM_DISTANCE, agents_position, logger) -> bool:
 
     #create a list with a unique index of all agents that are used
     dim           = len(tasks[0].rel_position)
@@ -186,8 +186,13 @@ def solve_task_decomposition(tasks , task_paths: list[tuple[int,int]], BOX_WEIGH
         edge_vars_pair = graph.edges[i][j]
         e_var, scale_var,_ = edge_vars_pair
 
+        e_var         = edge_vars_pair[0]
+        scale_var     = edge_vars_pair[1]
+        u1,v1         = edge_vars_pair[2]
+        current_relative_position = agents_position[v1-1] - agents_position[u1-1]
+
         cost += -BOX_WEIGHT *scale_var 
-        cost += C_norm * cp.norm(e_var)
+        cost += C_norm * cp.norm(e_var - current_relative_position[:dim])
 
 
     prob = cp.Problem(cp.Minimize(cost), constraints)

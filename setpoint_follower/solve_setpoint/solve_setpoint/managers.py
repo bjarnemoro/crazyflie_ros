@@ -218,6 +218,15 @@ class Manager(Node):
         self.get_logger().debug(f"{AnsiColor.BOLD_GREEN} Current communication edges: {comm_edges} {AnsiColor.RESET}")
 
         active_self_tasks, active_edge_tasks, possible_task_paths, decomposition_needed, is_disconnected = self.task_manager.get_active_tasks_and_decomposition_paths(current_time, comm_edges, self.get_logger())
+        
+
+        # publish active tasks for plottoing
+        if self.is_rviz_node_connected():
+            msg = TMsglist()
+            for task in active_edge_tasks:
+                msg.messages.append(self.task_manager.get_tmsg(task))
+            self.task_pub.publish(msg)
+
 
         if not decomposition_needed:
             self.get_logger().info(f"{AnsiColor.BOLD_GREEN} No decompostion needed. {AnsiColor.RESET}")
@@ -233,8 +242,9 @@ class Manager(Node):
         
         num_attempts = len(possible_task_paths)
         for jj,task_paths in enumerate(possible_task_paths,start=1) :
+            agents_position = self.graph_manager.get_pos()
 
-            cvx_status, new_edge_tasks = solve_task_decomposition(active_edge_tasks, task_paths,self.BOX_WEIGHT, self.COMM_DISTANCE, self.get_logger())
+            cvx_status, new_edge_tasks = solve_task_decomposition(active_edge_tasks, task_paths,self.BOX_WEIGHT, self.COMM_DISTANCE, agents_position, self.get_logger())
             if cvx_status == "optimal" : 
                 #compute the barrier function
                 self.get_logger().info(f"{AnsiColor.BOLD_GREEN} All tasks can be decomposed successfully!{AnsiColor.RESET}")

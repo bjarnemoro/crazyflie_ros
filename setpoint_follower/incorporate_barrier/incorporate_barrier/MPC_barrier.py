@@ -91,12 +91,14 @@ class STLMPC:
 
         # Time-varying relative constraints
         logger.info(f"Number of time-varying constraints: {len(self.squares)}")
+        task_agents = set()
         for k in range(self.horizon + 1):
             row = 0
 
             for qq,square in enumerate(self.squares):
                 agent_i = square.edge_i - 1
                 agent_j = square.edge_j - 1
+                task_agents.add((agent_i, agent_j))
                 
                 C = relative_matrix(self.states_dim,self.num_agents,agent_j, agent_i)
 
@@ -109,8 +111,16 @@ class STLMPC:
                 # add communication distance constraint
                 constraints += [ cp.sum_squares(C @ self.x[:, k]) <= self.communication_distance**2 + self.comm_slack[k] ]
 
+            # for the agents not in the task, make them converge to the average position of the others softly 
+            for i in range(self.num_agents):
+                if not any(i in pair for pair in task_agents):
+                    C = relative_matrix(self.states_dim,self.num_agents, i, i)
+                    state_xi = C @ self.x[:, k]
+                    constraints += [ cp.sum_squares(state_xi) <= self.communication_distance**2 + 3*self.comm_slack[k] ]
+            
+
         # Objective
-        objective = cp.Minimize(1e2 * cp.sum_squares(self.task_slack) +  1e3*cp.sum_squares(self.u) + 1e1 * cp.sum_squares(self.comm_slack))
+        objective = cp.Minimize(1e2*cp.sum_squares(self.task_slack) + cp.sum_squares(self.u[:,1:] - self.u[:,:-1] ) + cp.sum_squares(self.u) + 1e1 * cp.sum_squares(self.comm_slack))
 
         self.prob = cp.Problem(objective, constraints)
 

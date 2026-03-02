@@ -81,7 +81,7 @@ class llmManager(Node):
     these setpoints are calculated using optimization methods on given tasks
     """
     def __init__(self):
-        super().__init__('manager',allow_undeclared_parameters=True, automatically_declare_parameters_from_overrides = True)
+        super().__init__('llm_manager',allow_undeclared_parameters=True, automatically_declare_parameters_from_overrides = True)
         
         # Parameters are declared from indie the yaml file. Since we have set 
         # automatically_declare_parameters_from_overrides = true, then all the parameters inside

@@ -73,12 +73,16 @@ def launch_setup(context, *args, **kwargs):
     use_sim_time_value = (backend_value == "sim")
 
     hil_value = perform_substitutions(context, [HIL])
+    # from string to boolean
+    hil_value = hil_value.lower() == "true"
+    
 
     nodes = []
 
     # Manager node
 
     print(drone_indices)
+    print(f"HIL mode: {hil_value}")
 
     if hil_value: # use llm to give inputs to the agents
         nodes.append(

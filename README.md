@@ -69,14 +69,14 @@ you can run the main simulation in gazebo with rviz
 
 1. Without Human in the loop (tasks are read from the configuration file inside `config/mission/simple.yaml`)
 ```
-ros2 launch crazyflie_ros2_setpoint_follower solver.launch.py mission_yaml:=simple.yaml backend:=hardware hil:=false
+ros2 launch crazyflie_ros2_setpoint_follower solver.launch.py mission_yaml:=simple.yaml backend:=sim hil:=false
 
 ```
 
 2. with human in the loop
 
 ```
-ros2 launch crazyflie_ros2_setpoint_follower solver.launch.py mission_yaml:=simple.yaml backend:=hardware hil:=true
+ros2 launch crazyflie_ros2_setpoint_follower solver.launch.py mission_yaml:=simple.yaml backend:=sim hil:=true
 
 ```
 
