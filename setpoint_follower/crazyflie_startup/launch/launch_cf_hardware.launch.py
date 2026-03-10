@@ -29,9 +29,14 @@ def generate_launch_description():
                 crazylie_setpoint_dir,
                 "config/hardware/teleop.yaml"
             ),
+            "server_yaml_file": os.path.join(
+                crazylie_setpoint_dir,
+                "config/hardware/server.yaml"
+            ),
 
             "teleop":"false",
             "gui": "false",
+            "backend": "cpp",
         }.items()
     )
 

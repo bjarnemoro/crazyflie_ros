@@ -1,0 +1,148 @@
+/**: 
+  ros__parameters:
+    
+    ###########################################
+    # General node parameters 
+    ###########################################
+    DIM: 2               # Dimension of the space
+    MANAGER_TIMER: 0.8   # Time at which the manager updates (seconds)
+    AGENT_TIMER: 0.05     # frequency of the MPC (seconds)
+    SPEED: 0.3           # Nominal speed of the agents
+    BOX_WEIGHT: 10       # Weight of the boxes in the cost function
+    COMM_DISTANCE: 1.5    # Communication distance between agents
+    HOOVERING_HEIGHT: 1. # Alitude at which the drones move nominally
+
+    ###########################################################################################################
+    # Specific of each agent. The agent number corresponds to the crazyflie number (check the tag on the drone).
+    # N.B. Make sure that a drone with such number exists in the real fleet or in the simulation.
+    ###########################################################################################################
+
+    
+    agent_1:
+      pos: [ 0., 0., 0.3 ]
+      radio:  "*"
+      channel: 60
+    
+    agent_2:
+      pos: [ -0.5, -0.5, 0.3 ]
+      radio: "*"
+      channel: 80
+
+    agent_3:
+      pos: [ 0.5, -0.5, 0.3 ]
+      radio:  "*"
+      channel: 60
+
+    agent_4:
+      pos: [ 0.5, 0.5, 0.3 ]
+      radio:  "*"
+      channel: 60
+
+    agent_5:
+      pos: [ -0.5, 0.5, 0.3 ]
+      radio:  "*"
+      channel: 80
+
+    agent_11:
+      pos: [ 1.0, 0.0, 0.3 ]
+      radio:  "*"
+      channel: 70
+
+    agent_6:
+      pos: [ -1., 0., 0.3 ]
+      radio:  "*"
+      channel: 70
+
+
+    
+    ###########################################################################################################
+    # Tasks specifications
+    ###########################################################################################################
+
+    # Tasks grouping by period
+    PERIODS:
+      period_0: [40.0, 45.0]
+      period_1: [85.0, 90.0]
+      period_2: [180.0, 190.0]
+
+    TASKS:
+      # PERIOD 0 — LETTER K
+      # =======================
+      # Origin (0,0) is the center of the K.
+      task_1: 
+        period_num: 0             # period at which the task is accomplished 
+        edges: [1, 2]             # edge that defines the relative position (nb: make sure that an agent with the given number exists)
+        rel_position: [2., 0.]   # relative position with respect to the edge defined by the two agents
+        size: 0.2                 # size of the task (halfsize of a cube)
+        type: "always"
+      task_2: # Vertical Bottom
+        period_num: 0
+        edges: [1, 3]
+        rel_position: [1., 1.4]
+        size: 0.2
+        type: "always"
+      task_3: 
+        period_num: 0             # period at which the task is accomplished 
+        edges: [2, 3]             # edge that defines the relative position (nb: make sure that an agent with the given number exists)
+        rel_position: [-1., 1.4]   # relative position with respect to the edge defined by the two agents
+        size: 0.1                 # size of the task (halfsize of a cube)
+        type: "always"
+
+      task_4: 
+        period_num: 0             # period at which the task is accomplished 
+        edges: [1, 1]             # edge that defines the relative position (nb: make sure that an agent with the given number exists)
+        rel_position: [0., 0.]   # relative position with respect to the edge defined by the two agents
+        size: 0.1                 # size of the task (halfsize of a cube)
+        type: "always"
+     
+
+      task_8: 
+        period_num: 1             # period at which the task is accomplished 
+        edges: [1, 6]             # edge that defines the relative position (nb: make sure that an agent with the given number exists)
+        rel_position: [3.4, 0.0]   # relative position with respect to the edge defined by the two agents
+        size: 0.2                 # size of the task (halfsize of a cube)
+        type: "always"
+      task_9: 
+        period_num: 2             # period at which the task is accomplished 
+        edges: [1, 1]             # edge that defines the relative position (nb: make sure that an agent with the given number exists)
+        rel_position: [1.5, 0.0]   # relative position with respect to the edge defined by the two agents
+        size: 0.2                 # size of the task (halfsize of a cube)
+        type: "always"
+
+
+      task_12: 
+        period_num: 2             # period at which the task is accomplished 
+        edges: [6, 2]             # edge that defines the relative position (nb: make sure that an agent with the given number exists)
+        rel_position: [0.0, 1.0]   # relative position with respect to the edge defined by the two agents
+        size: 0.2                 # size of the task (halfsize of a cube)
+        type: "always"
+      task_13: # Vertical Bottom
+        period_num: 2
+        edges: [6, 3]
+        rel_position: [0.0, -1.]
+        size: 0.2
+        type: "always"
+      task_14: 
+        period_num: 2             # period at which the task is accomplished 
+        edges: [6, 5]             # edge that defines the relative position (nb: make sure that an agent with the given number exists)
+        rel_position: [-1.8, 0.4]   # relative position with respect to the edge defined by the two agents
+        size: 0.2                 # size of the task (halfsize of a cube)
+        type: "always"
+      task_15: 
+        period_num: 2             # period at which the task is accomplished 
+        edges: [6, 4]             # edge that defines the relative position (nb: make sure that an agent with the given number exists)
+        rel_position: [-1.8, -0.4]   # relative position with respect to the edge defined by the two agents
+        size: 0.2                 # size of the task (halfsize of a cube)
+        type: "always"
+
+      task_16: 
+        period_num: 2             # period at which the task is accomplished 
+        edges: [6, 6]             # edge that defines the relative position (nb: make sure that an agent with the given number exists)
+        rel_position: [0.0, 0.0]   # relative position with respect to the edge defined by the two agents
+        size: 0.2                 # size of the task (halfsize of a cube)
+        type: "always"
+
+
+
+
+     

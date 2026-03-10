@@ -110,17 +110,10 @@ class STLMPC:
 
                 # add communication distance constraint
                 constraints += [ cp.sum_squares(C @ self.x[:, k]) <= self.communication_distance**2 + self.comm_slack[k] ]
-
-            # for the agents not in the task, make them converge to the average position of the others softly 
-            for i in range(self.num_agents):
-                if not any(i in pair for pair in task_agents):
-                    C = relative_matrix(self.states_dim,self.num_agents, i, i)
-                    state_xi = C @ self.x[:, k]
-                    constraints += [ cp.sum_squares(state_xi) <= self.communication_distance**2 + 3*self.comm_slack[k] ]
             
 
         # Objective
-        objective = cp.Minimize(1e2*cp.sum_squares(self.task_slack) + cp.sum_squares(self.u[:,1:] - self.u[:,:-1] ) + cp.sum_squares(self.u) + 1e1 * cp.sum_squares(self.comm_slack))
+        objective = cp.Minimize(4e0* cp.sum_squares(self.task_slack) + cp.sum_squares(self.u[:,1:] - self.u[:,:-1] ) + cp.sum_squares(self.u) + 1e1 * cp.sum_squares(self.comm_slack))
 
         self.prob = cp.Problem(objective, constraints)
 

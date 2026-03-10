@@ -48,16 +48,17 @@ class MPC_agents(Node):
         self.COMM_DISTANCE    = self.get_parameter("COMM_DISTANCE").value
         self.AGENTS_INDICES   = self.get_parameter("AGENTS_INDICES").value
         self.NUM_AGENTS       = len(self.AGENTS_INDICES)
+        self.dt = 0.1
 
         self.landing_time = 10.0 # takes 8 seconds to land
         self.Z_SPEED      = 0.5
 
         self.mpc_solver = STLMPC(num_agents = self.NUM_AGENTS,
                                 agents_dim = self.DIM,
-                                dt         = 0.1,
+                                dt         = self.dt,
                                 horizon    = 10,
                                 max_input  = self.SPEED,
-                                communication_distance = self.COMM_DISTANCE)
+                                communication_distance = self.COMM_DISTANCE*0.90)
 
         self.fast_cb_group = ReentrantCallbackGroup()
         self.mpc_cb_group = MutuallyExclusiveCallbackGroup()
@@ -278,31 +279,92 @@ class MPC_agents(Node):
 
         if self.SYSTEM == WorkingMode.REAL :
             x_new = self.mpc_solver(x0, time_sec, return_val="x_next", logger=self.get_logger())
+            x_new = self.apply_collision_barrier(x_new)
+
         elif self.SYSTEM == WorkingMode.SIM:
-            u     = self.mpc_solver(x0, time_sec,  return_val="u0", logger=self.get_logger())
-        
+
+            u = self.mpc_solver(x0, time_sec, return_val="u0", logger=self.get_logger())
+
+            # Predict next position
+            pos_pred = self.pos[:, :self.DIM] + self.dt * u.reshape(self.NUM_AGENTS, self.DIM)
+
+            # Apply collision avoidance
+            pos_corrected = self.apply_collision_barrier(pos_pred.flatten())
+            pos_corrected = pos_corrected.reshape(self.NUM_AGENTS, self.DIM)
+
+            # Convert corrected position back to velocity
+            u = (pos_corrected - self.pos[:, :self.DIM]) / self.dt
+
+            # Flatten to keep original indexing
+            u = u.flatten()
+
+
         if self.SYSTEM == WorkingMode.SIM:
-            
+
             for idx, publisher in enumerate(self.twist_publishers):
+
                 msg = Twist()
-                agent_index  = self.DIM*idx
-                msg.linear.x = u[agent_index+0]
-                msg.linear.y = u[agent_index+1]
-                msg.linear.z = np.clip(self.hoover_heights[idx] - self.pos[idx, 2], -self.Z_SPEED, self.Z_SPEED)
-                msg.angular.z = np.clip(0. - self.angles[idx, 2], -self.SPEED, self.SPEED)
+                agent_index = self.DIM * idx
+
+                msg.linear.x = float(u[agent_index + 0])
+                msg.linear.y = float(u[agent_index + 1])
+
+                msg.linear.z = float(np.clip(
+                    self.hoover_heights[idx] - self.pos[idx, 2],
+                    -self.Z_SPEED,
+                    self.Z_SPEED
+                ))
+
+                msg.angular.z = float(np.clip(
+                    0. - self.angles[idx, 2],
+                    -self.SPEED,
+                    self.SPEED
+                ))
+
                 publisher.publish(msg)
-        
+
+
         if self.SYSTEM == WorkingMode.REAL:
-            
+
             for idx, publisher in enumerate(self.twist_publishers):
-                
+
                 pos = Position()
-                agent_index  = self.DIM*idx
-                pos.x = x_new[agent_index+0]
-                pos.y = x_new[agent_index+1]
-                pos.z = self.hoover_heights[idx]
-                pos.yaw = 0.
+                agent_index = self.DIM * idx
+
+                pos.x = float(x_new[agent_index + 0])
+                pos.y = float(x_new[agent_index + 1])
+                pos.z = float(self.hoover_heights[idx])
+                pos.yaw = 0.0
+
                 publisher.publish(pos)
+    def apply_collision_barrier(self, x_new):
+
+        pos = x_new.reshape(self.NUM_AGENTS, self.DIM)
+
+        d_safe = 0.40
+        k_rep  = 0.04
+
+        correction = np.zeros_like(pos)
+
+        for i in range(self.NUM_AGENTS):
+            for j in range(i+1, self.NUM_AGENTS):
+
+                diff = pos[i] - pos[j]
+                dist = np.linalg.norm(diff)
+
+                if dist < d_safe and dist > 1e-6:
+
+                    direction = diff / dist
+                    strength = k_rep * (1/dist - 1/d_safe)
+
+                    corr = strength * direction
+
+                    correction[i] += corr
+                    correction[j] -= corr
+
+        pos = pos + correction
+
+        return pos.flatten()
 
     def gathering(self):
 
@@ -325,19 +387,19 @@ class MPC_agents(Node):
                 publisher.publish(msg)
         
         if self.SYSTEM == WorkingMode.REAL:
-            k_p = 0.2
+            v  = 0.05
             for idx, publisher in enumerate(self.twist_publishers):
                 
                 pos = Position()
+                direction = np.array([self.gathering_pos[0] - self.pos[idx,0], self.gathering_pos[1] - self.pos[idx,1]])/ np.linalg.norm(np.array([self.gathering_pos[0] - self.pos[idx,0], self.gathering_pos[1] - self.pos[idx,1]]))
                 agent_index  = self.DIM*idx
-                pos.x = (self.gathering_pos[0] - self.pos[idx,0]) * k_p
-                pos.y = (self.gathering_pos[1] - self.pos[idx,1]) * k_p
+                pos.x = self.pos[idx,0] + direction[0]*v * self.dt
+                pos.y = self.pos[idx,1] + direction[1]*v * self.dt
                 pos.z = self.hoover_heights[idx]
                 pos.yaw = 0.
                 publisher.publish(pos)
 
         
-
     def MPC_callback(self):
 
         self.time      = self.get_clock().now() - self.start_time

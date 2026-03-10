@@ -233,7 +233,7 @@ def generate_launch_description():
         mission_yaml,
         gz_sim,
         TimerAction(
-        period=7.0,
+        period=3.0,
         actions=[
             OpaqueFunction(function=launch_setup)
             ],

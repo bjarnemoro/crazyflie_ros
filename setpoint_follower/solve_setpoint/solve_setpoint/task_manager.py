@@ -174,7 +174,7 @@ class TaskManager():
         decomposition_needed         = True
         decomposition_paths_dict     = list_decomposition_paths_per_task(inconsistent_tasks, graph, self.COMM_DISTANCE, log) # returns a list of possible decomposition
         possible_decomposition_paths = []
-        attempts = 100
+        attempts = 40
         
         for _ in range(attempts) : # try multiple times to find decomposition paths
             decomposition_paths_attempt = []
@@ -198,32 +198,6 @@ class TaskManager():
             possible_decomposition_paths.append(decomposition_paths_attempt) # define list of n = attempts decomposition path. Each attempt defined a path of decomositoon for the task
 
         return possible_decomposition_paths, decomposition_needed , is_diconnected
-
-    def load_task_path(self, task_path):
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        output_path = os.path.join(current_dir, task_path)
-
-        with open(output_path) as read_file:
-            task_dicts = json.load(read_file)
-
-        self.__tasks = [Task(**d) for d in task_dicts]
-
-    def save_tasks(self, task_path):
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        output_path = os.path.join(current_dir, task_path)
-
-        data = [dataclasses.asdict(task) for task in self.__tasks]
-
-        with open(output_path, mode="w", encoding="utf-8") as write_file:
-            written = json.dump(data, write_file)
-
-    def get_tasks(self, time):
-        active_tasks = []
-        for task in self.__tasks:
-            if time >= task.timespan[0] and time < task.timespan[1]:
-                active_tasks.append(task)
-
-        return[(task.edges, task.rel_position) for task in active_tasks]
     
     def get_tmsg(self, task):
         

@@ -10,7 +10,7 @@
       poses:
         qos:
           mode: "sensor"
-          deadline: 100.0 # Hz
+          deadline: 50.0 # Hz
       tf:
         child_frame_id: "{}_mocap"
 

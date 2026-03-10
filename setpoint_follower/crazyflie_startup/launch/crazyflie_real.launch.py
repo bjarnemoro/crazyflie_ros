@@ -105,8 +105,8 @@ def generate_crazyswarm_config( agents : dict[int,dict], dir_path: str) -> str:
             "firmware_logging": {
                 "enabled": True,
                 "default_topics": {
-                    "pose": {"frequency": 10},
-                    "status": {"frequency": 1}
+                    "pose": {"frequency": 5},
+                    # "status": {"frequency": 1}
                 }
             },
             "firmware_params": {
@@ -114,10 +114,10 @@ def generate_crazyswarm_config( agents : dict[int,dict], dir_path: str) -> str:
                 "stabilizer": {"estimator": 2, # kalman filter 
                               "controller": 2},# PID , 2 # mellinger (for collision avoidance this is the recommended one)
                 "locSrv": {"extPosStdDev": 1e-3, "extQuatStdDev": 0.5e-1},
-                "colAv": {"enable": 1,
-                          "ellipsoidX": 0.20,
-                          "ellipsoidY": 0.20,
-                          "ellipsoidZ": 0.50
+                "colAv": {"enable": 0,
+                          "ellipsoidX": 0.15,
+                          "ellipsoidY": 0.15,
+                          "ellipsoidZ": 0.60
                           },
                 # "posCtlPid":{"xVelMax": 1.0,
                 #               "yVelMax": 1.0,
@@ -125,7 +125,7 @@ def generate_crazyswarm_config( agents : dict[int,dict], dir_path: str) -> str:
                 #             }
             },
             "reference_frame": "mocap",
-            "broadcasts": {"num_repeats": 15, 
+            "broadcasts": {"num_repeats": 10, 
                            "delay_between_repeats_ms": 1}
         }
     }
