@@ -55,23 +55,10 @@ class GraphManager:
             self.__comm_graph[edge[0]].append(edge[1])
             self.__comm_graph[edge[1]].append(edge[0])
 
-    def set_pos_callback(self, msg, idx, log):
-        """
-        set the position of an agent by index. Index starts from 1 to N_agents so 
-        we need to subtract 1 to access the array
-        """
     
-        if not self.online_status[idx-1]:
-            self.online_status[idx-1] = 1
-
-        if type(msg) == Odometry:
-            self.__agent_pos[idx-1][0] = msg.pose.pose.position.x
-            self.__agent_pos[idx-1][1] = msg.pose.pose.position.y
-            self.__agent_pos[idx-1][2] = msg.pose.pose.position.z
-        elif type(msg) == PoseStamped:
-            self.__agent_pos[idx-1][0] = msg.pose.position.x
-            self.__agent_pos[idx-1][1] = msg.pose.position.y
-            self.__agent_pos[idx-1][2] = msg.pose.position.z
+    
+    def set_poses(self, poses: np.ndarray):
+        self.__agent_pos = poses.copy()
 
     def get_pos(self):
         return self.__agent_pos

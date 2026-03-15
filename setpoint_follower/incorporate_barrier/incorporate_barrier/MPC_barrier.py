@@ -63,6 +63,7 @@ class STLMPC:
         # Time-varying constraint data
         self.task_slack = cp.Variable((nx, self.horizon + 1), nonneg=True)
         self.comm_slack = cp.Variable((self.horizon + 1), nonneg=True)
+        self.arena_slack = cp.Variable((self.total_state_dim, self.horizon + 1), nonneg=True)
         self.b_offset = cp.Parameter((nx, self.horizon + 1))
 
         constraints = []
@@ -110,10 +111,20 @@ class STLMPC:
 
                 # add communication distance constraint
                 constraints += [ cp.sum_squares(C @ self.x[:, k]) <= self.communication_distance**2 + self.comm_slack[k] ]
+
+        # add arena size constraint for x and y dimension of each agent
+        arena_size = 10.0  # Assuming a 10x10 arena, adjust as needed
+        for k in range(self.horizon + 1):
+            for i in range(self.num_agents):
+                idx = self.agent_index(i)
+                constraints += [
+                    self.x[idx : idx + self.states_dim, k] >= -1.9 - self.arena_slack[idx : idx + self.states_dim, k],
+                    self.x[idx : idx + self.states_dim, k] <= 1.9 + self.arena_slack[idx : idx + self.states_dim, k]
+                ]
             
 
         # Objective
-        objective = cp.Minimize(4e0* cp.sum_squares(self.task_slack) + cp.sum_squares(self.u[:,1:] - self.u[:,:-1] ) + cp.sum_squares(self.u) + 1e1 * cp.sum_squares(self.comm_slack))
+        objective = cp.Minimize(3e1* cp.sum_squares(self.task_slack) + 0.1*cp.sum_squares(self.u) + 1e1 * cp.sum_squares(self.comm_slack) + 0.8*cp.sum_squares(self.arena_slack)) 
 
         self.prob = cp.Problem(objective, constraints)
 

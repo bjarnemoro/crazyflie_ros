@@ -5,8 +5,10 @@ import numpy as np
 import tf_transformations
 
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped
+from motion_capture_tracking_interfaces.msg import NamedPoseArray
 from geometry_msgs.msg import Twist
 from crazyflie_interfaces.msg import Position, FullState
 from rclpy.executors import MultiThreadedExecutor
@@ -70,7 +72,8 @@ class MPC_agents(Node):
         self.stop_command_sub     = self.create_subscription(Bool, "/stop_mpc", self.on_stop, 10, callback_group=self.fast_cb_group)
 
 
-        self.drones_names = ['{}{}'.format("/crazyflie", i) for i in  self.AGENTS_INDICES]
+        self.drones_names = ['crazyflie{}'.format(i) for i in self.AGENTS_INDICES]
+        self.name_to_index = {name: i for i, name in enumerate(self.drones_names)}
 
         odom_name = {WorkingMode.SIM: "/odom" , WorkingMode.REAL: "/pose"}
         odom_type = {WorkingMode.SIM: Odometry, WorkingMode.REAL: PoseStamped}
@@ -86,17 +89,42 @@ class MPC_agents(Node):
         else:
             self.hoover_heights   = [self.HOOVERING_HEIGHT + 0.1*idx for idx in range(self.NUM_AGENTS)]
         
-        for i, drone in enumerate(self.drones_names):
-            callback = lambda msg, idx=i: self.odom_callback(msg, idx)
-            self.odom_subscribers.append(self.create_subscription(
-                odom_type[self.SYSTEM], drone + odom_name[self.SYSTEM], callback, 10))
-            self.twist_publishers.append(self.create_publisher(cmd_type[self.SYSTEM], drone + cmd_name[self.SYSTEM], 10))
+        
+        if self.SYSTEM == WorkingMode.SIM:
+            for i, drone in enumerate(self.drones_names):
+                callback = lambda msg, idx=i: self.odom_callback(msg, idx)
+                self.odom_subscribers.append(self.create_subscription(
+                    odom_type[self.SYSTEM], drone + odom_name[self.SYSTEM], callback, 10))
+                
+                self.twist_publishers.append(
+                    self.create_publisher(cmd_type[self.SYSTEM],drone + cmd_name[self.SYSTEM],10)
+                    )
 
-            if self.SYSTEM == WorkingMode.REAL:
+        elif self.SYSTEM == WorkingMode.REAL:
+
+
+            qos = QoSProfile(
+                reliability=QoSReliabilityPolicy.BEST_EFFORT,
+                history=QoSHistoryPolicy.KEEP_LAST,
+                depth=10)
+            self.pose_sub = self.create_subscription(NamedPoseArray,"/poses", self.poses_callback,qos   )
+
+            for drone in self.drones_names:
+
+                self.twist_publishers.append(
+                    self.create_publisher(cmd_type[self.SYSTEM], drone + cmd_name[self.SYSTEM], 10)
+                )
+
                 takeoffService = self.create_client(Takeoff, drone + '/takeoff')
+
                 while not takeoffService.wait_for_service(timeout_sec=1.0):
-                    self.get_logger().warn('takeoff service not available, waiting again... Make sure the crazyswarm is launched')
+                    self.get_logger().warn(
+                        'takeoff service not available, waiting again... Make sure the crazyswarm is launched'
+                    )
                 self.takeoff_services.append(takeoffService)
+
+        else :
+            raise Exception("Invalid working mode. Please choose either 'sim' or 'hardware' as backend parameter.")
             
                 
         self.pos = np.zeros((self.NUM_AGENTS, 3))
@@ -175,6 +203,19 @@ class MPC_agents(Node):
         self.angles[idx, 0] = euler[0]
         self.angles[idx, 1] = euler[1]
         self.angles[idx, 2] = euler[2]
+
+
+    def poses_callback(self, msg):
+        for p in msg.poses:
+
+            idx      = self.name_to_index.get(p.name)
+            if idx is None:
+                continue
+            position = p.pose.position
+
+            self.pos[idx, 0] = position.x
+            self.pos[idx, 1] = position.y
+            self.pos[idx, 2] = position.z
 
 
     def on_barrier_message(self, msg):
@@ -337,12 +378,13 @@ class MPC_agents(Node):
                 pos.yaw = 0.0
 
                 publisher.publish(pos)
+    
     def apply_collision_barrier(self, x_new):
 
         pos = x_new.reshape(self.NUM_AGENTS, self.DIM)
 
-        d_safe = 0.40
-        k_rep  = 0.04
+        d_safe = 0.35
+        k_rep  = 0.08
 
         correction = np.zeros_like(pos)
 
@@ -362,6 +404,10 @@ class MPC_agents(Node):
                     correction[i] += corr
                     correction[j] -= corr
 
+        # cut the correction to avoid too large values
+        max_correction = 0.2
+        correction = np.clip(correction, -max_correction, max_correction)
+        
         pos = pos + correction
 
         return pos.flatten()

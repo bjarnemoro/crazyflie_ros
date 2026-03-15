@@ -4,8 +4,10 @@ import signal
 import numpy as np
 
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped
+from motion_capture_tracking_interfaces.msg import NamedPoseArray
 from std_msgs.msg import Int32MultiArray
 from std_msgs.msg import Int32, Bool
 from rclpy.executors import MultiThreadedExecutor
@@ -55,6 +57,12 @@ class Manager(Node):
         self.BOX_WEIGHT     = self.get_parameter("BOX_WEIGHT").value
         self.NUM_AGENTS     = len(self.AGENTS_INDICES)
 
+        qos = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+
 
         ##
         self.start_time = None
@@ -74,9 +82,10 @@ class Manager(Node):
 
         #setup all the subscribers and publishers
 
-        self.drones_names = ['{}{}'.format("/crazyflie", i) for i in  self.AGENTS_INDICES]
+        self.drones_names = ['crazyflie{}'.format(i) for i in self.AGENTS_INDICES]
+        self.name_to_index = {name: i for i, name in enumerate(self.drones_names)}
         
-        self.odom_subscribers     = []
+        self.odom_subscribers        = []
         self.edge_pub                = self.create_publisher(Int32MultiArray, "/graph_edges", 10)
         self.active_agents_pub       = self.create_publisher(Int32MultiArray, "/active_agents", 10)
         self.task_pub                = self.create_publisher(TMsglist, "/task_edges", 10)
@@ -84,6 +93,7 @@ class Manager(Node):
         self.landing_command_pub  = self.create_publisher(Bool, "/landing_command", 10)
         self.gather_command_pub   = self.create_publisher(Bool, "/gather_command", 10)
         self.agent_state_sub      = self.create_subscription(Int32, "/agent_state", self.on_agent_message, 10)
+        self.pos = np.zeros((self.NUM_AGENTS, 3))
 
         self.barrier_client       = self.create_client(BCompSrv, '/compute_barriers')
         while not self.barrier_client.wait_for_service(timeout_sec=1.0):
@@ -94,10 +104,18 @@ class Manager(Node):
         odom_name = {WorkingMode.SIM: "/odom", WorkingMode.REAL: "/pose"}
         odom_type = {WorkingMode.SIM: Odometry, WorkingMode.REAL: PoseStamped}
 
-        for i,drone in enumerate(self.drones_names, start=1):
-            callback = lambda msg, idx=i: self.graph_manager.set_pos_callback(msg, idx, self.get_logger().info)
-            self.odom_subscribers.append(self.create_subscription(
-                odom_type[self.SYSTEM], drone + odom_name[self.SYSTEM], callback, 10))
+        
+        if self.SYSTEM  == WorkingMode.SIM:
+            for i,drone in enumerate(self.drones_names):
+                callback = lambda msg, idx=i: self.odom_callback(msg, idx)
+                self.odom_subscribers.append(self.create_subscription(
+                    odom_type[self.SYSTEM], drone + odom_name[self.SYSTEM], callback, 10))
+            
+        elif self.SYSTEM == WorkingMode.REAL:
+            self.pose_sub = self.create_subscription(NamedPoseArray,"/poses", self.poses_callback,qos)
+
+        else :
+            raise Exception("Invalid working mode. Please choose either 'sim' or 'hardware' as backend parameter.")
 
         #start the main loops of the system with a timer method
         self.timer = self.create_timer(self.MANAGER_TIMER, self.mainloop)
@@ -105,9 +123,44 @@ class Manager(Node):
         #set the starting state
         self.manager_state = ManagerState.WAITING_FOR_ODOMETRY
         self.agent_state   = None
-        modes      = {0: "simulation", 1: "real"}
         self.get_logger().info(f"Working in {self.SYSTEM.name} mode. Manager state {self.manager_state.name} !!")
 
+    
+    def odom_callback(self, msg, idx):
+        
+        if type(msg) == Odometry:
+            self.pos[idx, 0] = msg.pose.pose.position.x
+            self.pos[idx, 1] = msg.pose.pose.position.y
+            self.pos[idx, 2] = msg.pose.pose.position.z
+
+        elif type(msg) == PoseStamped:
+            self.pos[idx, 0] = msg.pose.position.x
+            self.pos[idx, 1] = msg.pose.position.y
+            self.pos[idx, 2] = msg.pose.position.z
+
+        if not self.graph_manager.online_status[idx]:
+           self.graph_manager.online_status[idx] = 1
+
+        self.graph_manager.set_poses(self.pos)
+
+    
+    def poses_callback(self, msg):
+        for p in msg.poses:
+
+            idx      = self.name_to_index.get(p.name)
+            if idx is None:
+                continue
+            position = p.pose.position
+
+            self.pos[idx, 0] = position.x
+            self.pos[idx, 1] = position.y
+            self.pos[idx, 2] = position.z
+
+            if not self.graph_manager.online_status[idx]:
+                self.graph_manager.online_status[idx] = 1
+
+        self.graph_manager.set_poses(self.pos)
+    
     def on_new_barrier(self, future):
         try:
             response = future.result()

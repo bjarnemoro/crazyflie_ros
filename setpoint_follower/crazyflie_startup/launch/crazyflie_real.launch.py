@@ -103,7 +103,7 @@ def generate_crazyswarm_config( agents : dict[int,dict], dir_path: str) -> str:
         },
         "all": {
             "firmware_logging": {
-                "enabled": True,
+                "enabled": False,
                 "default_topics": {
                     "pose": {"frequency": 5},
                     # "status": {"frequency": 1}
@@ -125,7 +125,7 @@ def generate_crazyswarm_config( agents : dict[int,dict], dir_path: str) -> str:
                 #             }
             },
             "reference_frame": "mocap",
-            "broadcasts": {"num_repeats": 10, 
+            "broadcasts": {"num_repeats": 15, 
                            "delay_between_repeats_ms": 1}
         }
     }

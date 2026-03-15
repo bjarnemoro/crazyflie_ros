@@ -3,8 +3,10 @@ import rclpy
 import signal
 import numpy as np
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy, QoSDurabilityPolicy
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped
+from motion_capture_tracking_interfaces.msg import NamedPoseArray
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
 
@@ -175,7 +177,7 @@ class GraphMarkerPublisher(Node):
     def __init__(self):
         super().__init__('graph_marker_publisher')
 
-        self.declare_parameter("backend", "sim")
+        self.declare_parameter("backend", "hardware")
         self.declare_parameter("AGENTS_INDICES", [1])
 
         backend            = self.get_parameter("backend").value
@@ -183,6 +185,8 @@ class GraphMarkerPublisher(Node):
             self.SYSTEM = WorkingMode.SIM
         elif backend == "hardware":
             self.SYSTEM = WorkingMode.REAL
+
+        self.get_logger().info(f"GraphMarkerPublisher initialized with backend: {backend} and agents: {self.get_parameter('AGENTS_INDICES').value}")
 
 
         self.AGENTS_INDICES = self.get_parameter("AGENTS_INDICES").value
@@ -192,16 +196,29 @@ class GraphMarkerPublisher(Node):
         self.task_publisher = self.create_publisher(MarkerArray, 'task_visualization_marker', 10)
         self.timer          = self.create_timer(0.1, self.timer_callback)
 
-    
-        self.drones_names = ['{}{}'.format("/crazyflie", i) for i in  self.AGENTS_INDICES]
-        odom_name   = {WorkingMode.SIM: "/odom", WorkingMode.REAL: "/pose"}
-        odom_type   = {WorkingMode.SIM: Odometry, WorkingMode.REAL: PoseStamped}
+        self.drones_names = ['crazyflie{}'.format(i) for i in self.AGENTS_INDICES]
+        self.name_to_index = {name: i for i, name in enumerate(self.drones_names)}
+
+        odom_name = {WorkingMode.SIM: "/odom" , WorkingMode.REAL: "/pose"}
+        odom_type = {WorkingMode.SIM: Odometry, WorkingMode.REAL: PoseStamped}
 
         self.odom_subscribers = []
-        for jj,drone in enumerate(self.drones_names):
-            callback = lambda msg, idx=jj:self.pos_callback(msg, idx)
-            self.odom_subscribers.append(self.create_subscription(
-                odom_type[self.SYSTEM], drone + odom_name[self.SYSTEM], callback, 10))
+     
+        if self.SYSTEM == WorkingMode.SIM:
+            for i, drone in enumerate(self.drones_names):
+                callback = lambda msg, idx=i: self.odom_callback(msg, idx)
+                self.odom_subscribers.append(self.create_subscription(
+                    odom_type[self.SYSTEM], drone + odom_name[self.SYSTEM], callback, 10))
+
+        elif self.SYSTEM == WorkingMode.REAL:
+            qos = QoSProfile(
+                reliability=QoSReliabilityPolicy.BEST_EFFORT,
+                history=QoSHistoryPolicy.KEEP_LAST,
+                depth=10)
+            self.pose_sub = self.create_subscription(NamedPoseArray,"/poses", self.poses_callback, qos)
+
+        else :
+            raise Exception("Invalid working mode. Please choose either 'sim' or 'hardware' as backend parameter.")
 
         self.drone_pos = np.zeros((self.NUM_AGENTS, 3))
         self.edges = []
@@ -218,6 +235,32 @@ class GraphMarkerPublisher(Node):
         self.edges_set  = set()
         self.agents_set = set()
 
+    
+    def odom_callback(self, msg, idx):
+        
+        if type(msg) == Odometry:
+            self.drone_pos[idx, 0] = msg.pose.pose.position.x
+            self.drone_pos[idx, 1] = msg.pose.pose.position.y
+            self.drone_pos[idx, 2] = msg.pose.pose.position.z
+
+        elif type(msg) == PoseStamped:
+            self.drone_pos[idx, 0] = msg.pose.position.x
+            self.drone_pos[idx, 1] = msg.pose.position.y
+            self.drone_pos[idx, 2] = msg.pose.position.z
+
+    def poses_callback(self, msg):
+
+        for p in msg.poses:
+
+            idx = self.name_to_index.get(p.name)
+            if idx is None:
+                continue
+
+            pos = p.pose.position
+
+            self.drone_pos[idx, 0] = pos.x
+            self.drone_pos[idx, 1] = pos.y
+            self.drone_pos[idx, 2] = pos.z
 
 
     def timer_callback(self):
@@ -351,22 +394,6 @@ class GraphMarkerPublisher(Node):
         self.prev_task_ids = current_task_ids
 
         self.publisher.publish(task_marker_array)
-
-    
-    def pos_callback(self, msg, idx):
-        """
-        set the position of an agent by index. Index starts from 1 to N_agents so 
-        we need to subtract 1 to access the array
-        """
-        if type(msg) == Odometry:
-            self.drone_pos[idx][0] = msg.pose.pose.position.x
-            self.drone_pos[idx][1] = msg.pose.pose.position.y
-            self.drone_pos[idx][2] = msg.pose.pose.position.z
-
-        elif type(msg) == PoseStamped:
-            self.drone_pos[idx][0] = msg.pose.position.x
-            self.drone_pos[idx][1] = msg.pose.position.y
-            self.drone_pos[idx][2] = msg.pose.position.z
 
     def set_edges(self, msg):
         data = msg.data

@@ -1,4 +1,14 @@
-# crazyflie_ros
+## Communication Aware Task Decomposition
+
+![KTH](https://img.shields.io/badge/KTH-004B87?style=for-the-badge)
+![Signal Temporal Logic](https://img.shields.io/badge/Signal%20Temporal%20Logic-6A0DAD?style=for-the-badge)
+![Multi-Agent Systems](https://img.shields.io/badge/Multi--Agent%20Systems-2E8B57?style=for-the-badge)
+
+![Panel overview](rviz_panels.svg)
+
+
+
+
 ### setup
 ros dependencies
 ```
