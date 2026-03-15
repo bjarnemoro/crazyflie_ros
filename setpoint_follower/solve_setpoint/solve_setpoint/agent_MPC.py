@@ -320,7 +320,7 @@ class MPC_agents(Node):
 
         if self.SYSTEM == WorkingMode.REAL :
             x_new = self.mpc_solver(x0, time_sec, return_val="x_next", logger=self.get_logger())
-            x_new = self.apply_collision_barrier(x_new)
+            x_new = self.apply_collision_barrier(x_new, k = 0.08, d = 0.35)
 
         elif self.SYSTEM == WorkingMode.SIM:
 
@@ -330,7 +330,7 @@ class MPC_agents(Node):
             pos_pred = self.pos[:, :self.DIM] + self.dt * u.reshape(self.NUM_AGENTS, self.DIM)
 
             # Apply collision avoidance
-            pos_corrected = self.apply_collision_barrier(pos_pred.flatten())
+            pos_corrected = self.apply_collision_barrier(pos_pred.flatten(), k = 0.01, d = 0.35)
             pos_corrected = pos_corrected.reshape(self.NUM_AGENTS, self.DIM)
 
             # Convert corrected position back to velocity
@@ -379,12 +379,12 @@ class MPC_agents(Node):
 
                 publisher.publish(pos)
     
-    def apply_collision_barrier(self, x_new):
+    def apply_collision_barrier(self, x_new, k, d):
 
         pos = x_new.reshape(self.NUM_AGENTS, self.DIM)
 
-        d_safe = 0.35
-        k_rep  = 0.08
+        d_safe = d
+        k_rep  = k
 
         correction = np.zeros_like(pos)
 
